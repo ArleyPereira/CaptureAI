@@ -52,8 +52,12 @@ final class CaptureThumbnailController {
         // da janela, que o sistema desenha fora dos limites dela. Uma sombra
         // SwiftUI precisaria de folga dentro do painel e acabava cortada.
         let panelSize = thumbSize
-        let hosting = NSHostingView(rootView: root)
+        let hosting = DraggableThumbnailHostingView(rootView: root)
         hosting.frame = NSRect(origin: .zero, size: panelSize)
+        hosting.image = image
+        hosting.preview = nsImage
+        // Solto numa pasta, o trabalho da miniatura acabou — como no CleanShot.
+        hosting.onDropped = { [weak self] in self?.dismiss(animated: true) }
 
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: panelSize),
@@ -121,6 +125,108 @@ final class CaptureThumbnailController {
     /// lugar fixo que pede um objeto de tamanho fixo. 210×150 (7:5) é a medida
     /// da miniatura do CleanShot X.
     private static let thumbnailSize = NSSize(width: 210, height: 150)
+}
+
+/// Hospeda a miniatura e a torna arrastável como um arquivo de imagem.
+///
+/// Ao começar o arraste, a captura é gravada numa pasta temporária do sistema
+/// — fora da pasta de capturas, então fora do histórico — e esse arquivo vai
+/// para a área de arraste. Quem recebe faz a cópia: o Finder grava onde a
+/// pessoa soltou, e apps como Mail ou Slack anexam.
+///
+/// O arraste é AppKit, e não o `.onDrag` do SwiftUI, porque só o
+/// `NSDraggingSource` diz se a imagem foi solta em algum lugar — é isso que
+/// fecha a miniatura.
+final class DraggableThumbnailHostingView<Content: View>: NSHostingView<Content> {
+    var image: CGImage?
+    var preview: NSImage?
+    var onDropped: (() -> Void)? {
+        get { dragSource.onDropped }
+        set { dragSource.onDropped = newValue }
+    }
+
+    /// Fonte do arraste à parte: o `NSHostingView` já implementa
+    /// `NSDraggingSource` para uso interno e não permite sobrescrever.
+    private let dragSource = ThumbnailDragSource()
+
+    private var mouseDownPoint: NSPoint?
+    private var isDragging = false
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownPoint = event.locationInWindow
+        isDragging = false
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard !isDragging, let start = mouseDownPoint else { return }
+        // Uma folga antes de virar arraste, para um clique trêmulo nos botões
+        // não ser tomado por arrastar.
+        let distance = hypot(event.locationInWindow.x - start.x, event.locationInWindow.y - start.y)
+        guard distance > 4, let url = writeTemporaryFile() else {
+            super.mouseDragged(with: event)
+            return
+        }
+        isDragging = true
+
+        let item = NSDraggingItem(pasteboardWriter: url as NSURL)
+        item.setDraggingFrame(bounds.insetBy(dx: 0, dy: 0), contents: preview)
+        dragSource.onEnded = { [weak self] in
+            self?.isDragging = false
+            self?.mouseDownPoint = nil
+        }
+        beginDraggingSession(with: [item], event: event, source: dragSource)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        mouseDownPoint = nil
+        if !isDragging { super.mouseUp(with: event) }
+        isDragging = false
+    }
+
+    /// Grava a captura com um nome por data numa subpasta temporária única,
+    /// para dois arrastes seguidos não disputarem o mesmo arquivo.
+    private func writeTemporaryFile() -> URL? {
+        guard let image,
+              let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+        else { return nil }
+
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CaptureAI-drag-\(UUID().uuidString)", isDirectory: true)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let url = folder.appendingPathComponent("captureai-\(formatter.string(from: Date())).png")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            return nil
+        }
+        // O destino copia o arquivo no momento da soltura; um tempo depois o
+        // original temporário já não é necessário.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
+            try? FileManager.default.removeItem(at: folder)
+        }
+        return url
+    }
+
+}
+
+/// Diz ao sistema que a miniatura só sai como cópia, e avisa quando ela foi
+/// solta em algum lugar.
+final class ThumbnailDragSource: NSObject, NSDraggingSource {
+    var onDropped: (() -> Void)?
+    var onEnded: (() -> Void)?
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        // Cópia: soltar numa pasta nunca deve "mover" a captura de lugar algum.
+        context == .outsideApplication ? .copy : []
+    }
+
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        onEnded?()
+        if operation != [] { onDropped?() }
+    }
 }
 
 private struct CaptureThumbnailView: View {
