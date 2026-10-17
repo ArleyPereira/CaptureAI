@@ -16,13 +16,13 @@ struct ParakeetDownloadProgress: Sendable, Equatable {
 
     var speedLabel: String {
         guard bytesPerSecond > 0 else { return "—" }
-        return "\(Int64(bytesPerSecond).voiceIAThroughputLabel)/s"
+        return "\(Int64(bytesPerSecond).captureAIThroughputLabel)/s"
     }
 
     var sizeLabel: String {
-        let received = bytesReceived.voiceIAByteCountLabel
+        let received = bytesReceived.captureAIByteCountLabel
         if totalBytes > 0 {
-            return "\(received) / \(totalBytes.voiceIAByteCountLabel)"
+            return "\(received) / \(totalBytes.captureAIByteCountLabel)"
         }
         return received
     }

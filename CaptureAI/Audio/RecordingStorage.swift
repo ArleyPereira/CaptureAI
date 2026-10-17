@@ -18,6 +18,6 @@ enum RecordingStorage {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         let stamp = formatter.string(from: Date())
-        return directoryURL.appendingPathComponent("voiceia-\(stamp).\(fileExtension)")
+        return directoryURL.appendingPathComponent("captureai-\(stamp).\(fileExtension)")
     }
 }

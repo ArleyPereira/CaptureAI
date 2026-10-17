@@ -2,7 +2,7 @@ import Foundation
 
 extension Int64 {
     /// Tamanho em disco no estilo do Finder (KB/MB/GB).
-    var voiceIAByteCountLabel: String {
+    var captureAIByteCountLabel: String {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
         formatter.allowedUnits = [.useKB, .useMB, .useGB]
@@ -13,7 +13,7 @@ extension Int64 {
 
     /// Velocidade de download — unidade adaptativa, para o rótulo não pular
     /// de escala a cada amostra.
-    var voiceIAThroughputLabel: String {
+    var captureAIThroughputLabel: String {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .memory
         formatter.allowedUnits = [.useKB, .useMB, .useGB]

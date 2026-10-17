@@ -448,7 +448,7 @@ final class SettingsViewModel {
     }
 
     var storageSummaryLabel: String {
-        parakeetModelStore.onDiskByteCount.voiceIAByteCountLabel
+        parakeetModelStore.onDiskByteCount.captureAIByteCountLabel
     }
 
     var downloadsFooterLabel: String {
@@ -505,7 +505,7 @@ final class SettingsViewModel {
     }
 
     var ctcStorageLabel: String {
-        ctcModelStore.onDiskByteCount.voiceIAByteCountLabel
+        ctcModelStore.onDiskByteCount.captureAIByteCountLabel
     }
 
     /// O card precisa dizer se o download já serve para alguma coisa: baixado
