@@ -65,7 +65,7 @@ struct SettingsView: View {
             divider
             content
                 .overlay(alignment: .bottom) {
-                    UndoToastView(viewModel: viewModel)
+                    PanelToastView(viewModel: viewModel)
                 }
         }
         .background(SettingsBackground())

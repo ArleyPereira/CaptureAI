@@ -66,9 +66,9 @@ final class SettingsViewModel {
     /// Notifica o AppDelegate para re-registrar o atalho de captura.
     var onCaptureHotkeyChanged: () -> Void
 
-    /// Aviso de "desfazer" da última exclusão individual, se ainda valer.
-    var undoToast: UndoToast?
-    @ObservationIgnored fileprivate var undoDismissTask: Task<Void, Never>?
+    /// Aviso na base do painel: "desfazer" de uma exclusão ou confirmação de cópia.
+    var toast: PanelToast?
+    @ObservationIgnored fileprivate var toastDismissTask: Task<Void, Never>?
 
     /// Notifica a janela para aplicar Sistema / Claro / Escuro.
     var onAppearanceThemeChanged: () -> Void
@@ -693,6 +693,10 @@ extension SettingsViewModel {
     /// Copia de volta sem gerar um item novo no histórico.
     func copyClipboardEntry(_ entry: ClipboardEntry) {
         ClipboardMonitor.shared.copyWithoutRecording(entry.content)
+        showToast(PanelToast(
+            message: entry.kind == .link ? "Link copiado" : "Texto copiado",
+            icon: "doc.on.doc"
+        ))
     }
 
     func updateClipboardEntry(_ id: UUID, content: String) {
@@ -768,6 +772,7 @@ extension SettingsViewModel {
 
     func copyScreenshot(_ entry: ScreenshotEntry) {
         screenshotStore.copyToPasteboard(entry)
+        showToast(PanelToast(message: "Imagem copiada", icon: "doc.on.doc"))
     }
 
     func deleteScreenshot(_ entry: ScreenshotEntry) {
@@ -778,54 +783,65 @@ extension SettingsViewModel {
         }
     }
 
-    // MARK: Desfazer
+    func deleteAllScreenshots() {
+        screenshotStore.deleteAll()
+    }
 
-    /// Quanto o aviso fica na tela. Um pouco mais que os 3 s pedidos: é tempo
-    /// de perceber o engano, levar o mouse até o botão e clicar.
-    static let undoDuration: Duration = .seconds(4)
+    // MARK: Avisos
 
     /// Mostra o aviso com "Desfazer". Uma exclusão nova substitui a anterior,
     /// que passa a valer de vez.
     private func offerUndo(_ message: String, undo: @escaping () -> Void) {
-        undoToast = UndoToast(message: message, undo: undo)
-        scheduleUndoDismiss()
+        showToast(PanelToast(message: message, icon: "trash", actionTitle: "Desfazer", action: undo))
     }
 
-    func performUndo() {
-        guard let toast = undoToast else { return }
-        undoDismissTask?.cancel()
-        undoToast = nil
-        toast.undo()
+    /// Qualquer aviso novo substitui o que estiver na tela.
+    private func showToast(_ toast: PanelToast) {
+        self.toast = toast
+        scheduleToastDismiss()
+    }
+
+    func performToastAction() {
+        guard let toast, let action = toast.action else { return }
+        toastDismissTask?.cancel()
+        self.toast = nil
+        action()
     }
 
     /// Pausa a contagem enquanto o mouse está sobre o aviso: quem está indo
     /// clicar não pode perder o botão no meio do caminho.
-    func setUndoToastHovered(_ hovering: Bool) {
+    func setToastHovered(_ hovering: Bool) {
         if hovering {
-            undoDismissTask?.cancel()
+            toastDismissTask?.cancel()
         } else {
-            scheduleUndoDismiss()
+            scheduleToastDismiss()
         }
     }
 
-    private func scheduleUndoDismiss() {
-        undoDismissTask?.cancel()
-        guard let id = undoToast?.id else { return }
-        undoDismissTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.undoDuration)
-            guard !Task.isCancelled, let self, self.undoToast?.id == id else { return }
-            self.undoToast = nil
+    private func scheduleToastDismiss() {
+        toastDismissTask?.cancel()
+        guard let toast else { return }
+        let id = toast.id
+        toastDismissTask = Task { [weak self] in
+            try? await Task.sleep(for: toast.duration)
+            guard !Task.isCancelled, let self, self.toast?.id == id else { return }
+            self.toast = nil
         }
-    }
-
-    func deleteAllScreenshots() {
-        screenshotStore.deleteAll()
     }
 }
 
-/// Uma exclusão que ainda pode ser desfeita.
-struct UndoToast: Identifiable {
+/// Aviso na base do painel, com uma ação opcional.
+struct PanelToast: Identifiable {
     let id = UUID()
     let message: String
-    let undo: () -> Void
+    let icon: String
+    var actionTitle: String?
+    var action: (() -> Void)?
+
+    /// Com ação, um pouco mais que os 3 s pedidos: é tempo de perceber o
+    /// engano, levar o mouse até o botão e clicar. Sem ação é só uma
+    /// confirmação, lida de relance.
+    var duration: Duration {
+        action == nil ? .seconds(2) : .seconds(4)
+    }
 }

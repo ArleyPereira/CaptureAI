@@ -79,6 +79,11 @@ struct ClipboardSettingsView: View {
                         .font(.system(size: 12, weight: .medium))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 7)
+                        // Com o estilo plain só o que é desenhado recebe clique;
+                        // na aba não selecionada o fundo é transparente, e o
+                        // clique só pegava em cima do texto. A forma inteira
+                        // da aba passa a contar.
+                        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(
