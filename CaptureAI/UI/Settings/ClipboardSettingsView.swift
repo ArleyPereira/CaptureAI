@@ -312,7 +312,7 @@ struct ClipboardSettingsView: View {
             if viewModel.screenshotEntries.isEmpty {
                 emptyState(
                     title: "Nenhuma captura ainda",
-                    message: "Use \(viewModel.captureHotkey.displayName) para capturar. Tudo o que você copiar ou salvar aparece aqui."
+                    message: "Use \(viewModel.captureHotkey.displayName) para capturar. As capturas que você salvar aparecem aqui."
                 )
             } else {
                 LazyVGrid(

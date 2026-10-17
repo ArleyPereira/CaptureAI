@@ -7,8 +7,8 @@ import OSLog
 /// Uma captura de tela em disco.
 ///
 /// Diferente do histórico de texto, aqui o disco é a fonte da verdade: toda
-/// captura — copiada ou salva — vira um arquivo na pasta que o usuário
-/// escolheu, e a lista é montada lendo essa pasta. Não há JSON de índice: um
+/// captura salva vira um arquivo na pasta que o usuário escolheu, e a lista é
+/// montada lendo essa pasta. Copiar não grava nada. Não há JSON de índice: um
 /// arquivo apagado no Finder simplesmente deixa de aparecer.
 struct ScreenshotEntry: Identifiable, Equatable, Sendable {
     let id: URL

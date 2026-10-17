@@ -51,18 +51,17 @@ final class ScreenCaptureCoordinator {
         }
     }
 
-    /// Vai para a área de transferência com o tamanho em pontos — e para a
-    /// pasta de capturas, como toda captura.
+    /// Vai para a área de transferência com o tamanho em pontos.
     ///
-    /// Copiar e salvar não são destinos excludentes: copiar é salvar e, além
-    /// disso, deixar a imagem pronta para colar. Sem o tamanho em pontos, a
-    /// imagem colada sairia com o dobro do tamanho em telas Retina.
-    private func copy(_ image: CGImage, scale: CGFloat, save shouldSave: Bool = true) {
+    /// Copiar não grava arquivo nem entra no histórico de Imagens — é para
+    /// colar agora. Quem quer guardar usa Salvar, nos dois modos de captura.
+    /// Sem o tamanho em pontos, a imagem colada sairia com o dobro do tamanho
+    /// em telas Retina.
+    private func copy(_ image: CGImage, scale: CGFloat) {
         let size = NSSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.writeObjects([NSImage(cgImage: image, size: size)])
-        if shouldSave { save(image) }
     }
 
     @discardableResult
@@ -87,7 +86,7 @@ final class ScreenCaptureCoordinator {
         thumbnail.show(
             image: image,
             scale: scale,
-            onCopy: { [weak self] in self?.copy(image, scale: scale, save: false) },
+            onCopy: { [weak self] in self?.copy(image, scale: scale) },
             onSave: { [weak self] in self?.save(image) ?? false }
         )
     }
