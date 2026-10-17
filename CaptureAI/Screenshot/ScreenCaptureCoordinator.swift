@@ -39,9 +39,6 @@ final class ScreenCaptureCoordinator {
             case .cancelled:
                 return
 
-            case .copiedToPasteboard:
-                lastMessage = "Captura enviada para a área de transferência."
-
             case .captured(let temporaryURL):
                 guard let image = NSImage(contentsOf: temporaryURL) else {
                     service.discard(temporaryURL: temporaryURL)
@@ -63,7 +60,6 @@ final class ScreenCaptureCoordinator {
     private func presentReview(image: NSImage, temporaryURL: URL) {
         reviewWindow.present(
             image: image,
-            destinationLabel: settings.screenshotDirectoryDisplayPath,
             appearance: theme.resolvedNSAppearance(),
             preferredColorScheme: theme.resolvedColorScheme()
         ) { [weak self] decision in
@@ -79,8 +75,6 @@ final class ScreenCaptureCoordinator {
                 self.copy(edited)
             case .save(let edited):
                 self.save(edited, to: self.store.directoryURL)
-            case .saveAs(let edited):
-                self.saveAsking(edited)
             }
         }
     }
@@ -99,25 +93,6 @@ final class ScreenCaptureCoordinator {
             lastMessage = "Salva em \(url.lastPathComponent)."
         } catch {
             logger.error("Falha ao salvar captura: \(error.localizedDescription, privacy: .public)")
-            lastMessage = "Não foi possível salvar a captura."
-        }
-    }
-
-    /// Salvar escolhendo a pasta, sem mudar a configuração padrão.
-    private func saveAsking(_ image: NSImage) {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
-        panel.canCreateDirectories = true
-        panel.directoryURL = store.directoryURL
-        panel.nameFieldStringValue = Self.defaultFileName()
-        panel.title = "Salvar captura"
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try data(from: image)?.write(to: url, options: [.atomic])
-            store.reload()
-            lastMessage = "Salva em \(url.lastPathComponent)."
-        } catch {
             lastMessage = "Não foi possível salvar a captura."
         }
     }

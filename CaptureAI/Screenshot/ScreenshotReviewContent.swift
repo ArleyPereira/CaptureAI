@@ -36,7 +36,6 @@ enum HighlightStyle: String, CaseIterable, Identifiable {
 /// Revisão pós-captura: ver, destacar e decidir o destino.
 struct ScreenshotReviewContent: View {
     let image: NSImage
-    let destinationLabel: String
     let onDecision: (ScreenshotReviewDecision) -> Void
 
     @State private var highlights: [Highlight] = []
@@ -100,8 +99,8 @@ struct ScreenshotReviewContent: View {
                 .help("Desfazer o último destaque")
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Imagem
@@ -130,7 +129,7 @@ struct ScreenshotReviewContent: View {
             .contentShape(Rectangle())
             .gesture(isAnnotating ? dragGesture(in: frame) : nil)
         }
-        .padding(16)
+        .padding(10)
     }
 
     private func dragGesture(in frame: CGRect) -> some Gesture {
@@ -180,25 +179,11 @@ struct ScreenshotReviewContent: View {
 
     private var actions: some View {
         HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Salvar em")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(SettingsTheme.tertiaryLabel(colorScheme))
-                Text(destinationLabel)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(SettingsTheme.secondaryLabel(colorScheme))
-                    .lineLimit(1)
-                    .truncationMode(.head)
-            }
-
-            Spacer(minLength: 12)
+            Spacer(minLength: 0)
 
             Button("Descartar") { onDecision(.discard) }
                 .buttonStyle(GhostButtonStyle())
                 .keyboardShortcut(.cancelAction)
-
-            Button("Escolher pasta…") { onDecision(.saveAs(image: rendered())) }
-                .buttonStyle(GhostButtonStyle())
 
             Button {
                 onDecision(.copy(image: rendered()))
@@ -219,8 +204,8 @@ struct ScreenshotReviewContent: View {
             .tint(SettingsTheme.accent)
             .keyboardShortcut(.defaultAction)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
     }
 
     private var resolutionLabel: String {

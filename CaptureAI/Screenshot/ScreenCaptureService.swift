@@ -4,22 +4,17 @@ import OSLog
 
 /// Dispara a seleção de tela e devolve o arquivo capturado.
 ///
-/// A seleção é a nativa do macOS (`screencapture -i`), não uma janela nossa.
-/// Ela já entrega escurecimento, dimensões ao vivo, `Space` para arrastar a
-/// seleção inteira, `Esc` para cancelar e `Ctrl` para mandar direto à área de
-/// transferência — além de lidar com múltiplos monitores, escalas Retina e
-/// Spaces, que é onde um overlay próprio gastaria a maior parte do esforço.
-///
-/// O que o nativo não faz — revisar, anotar, escolher destino — é o que a
-/// janela de revisão acrescenta depois, já com a imagem em mãos.
+/// A seleção é nossa, não a do macOS: o seletor nativo (`screencapture -i`)
+/// mostra só um crosshair, sem escurecer a tela, e essa confirmação visual de
+/// "estou capturando, escolha a área" é o que se espera de uma ferramenta de
+/// captura. O véu, as alças e a etiqueta de dimensões vivem no
+/// `SelectionOverlayWindow`; aqui fica só o recorte da imagem.
 @MainActor
 final class ScreenCaptureService {
     enum CaptureResult {
         /// O usuário selecionou e o arquivo está em `url`.
         case captured(url: URL)
-        /// O usuário segurou Ctrl: a imagem foi para a área de transferência.
-        case copiedToPasteboard
-        /// Esc, ou seleção de área nula.
+        /// Esc, ou clique sem arrasto.
         case cancelled
     }
 
@@ -40,6 +35,7 @@ final class ScreenCaptureService {
     private static let toolPath = "/usr/sbin/screencapture"
     private let logger = Logger(subsystem: "dev.arley.santana.CaptureAI", category: "screen-capture")
     private let fileManager: FileManager
+    private let overlay = SelectionOverlayController()
 
     /// Impede duas seleções simultâneas — dois overlays nativos ao mesmo tempo
     /// deixam a tela num estado confuso e só o segundo responde ao Esc.
@@ -49,7 +45,7 @@ final class ScreenCaptureService {
         self.fileManager = fileManager
     }
 
-    /// Abre a seleção interativa e espera o usuário decidir.
+    /// Mostra o véu de seleção e captura a área escolhida.
     ///
     /// Grava num arquivo temporário em vez de direto na pasta final: enquanto a
     /// revisão não é confirmada, a captura ainda não é um arquivo que o usuário
@@ -58,32 +54,34 @@ final class ScreenCaptureService {
         guard fileManager.isExecutableFile(atPath: Self.toolPath) else {
             throw CaptureError.toolMissing
         }
-        guard !isCapturing else { return .cancelled }
+        guard !isCapturing, !overlay.isPresenting else { return .cancelled }
         isCapturing = true
         defer { isCapturing = false }
+
+        guard let region = await selectRegion() else { return .cancelled }
 
         let destination = fileManager.temporaryDirectory
             .appendingPathComponent("captureai-\(UUID().uuidString).png")
 
         let status = await runTool(arguments: [
-            "-i",   // seleção interativa
-            "-s",   // só seleção por arrasto; evita cair no modo janela sem querer
-            "-x",   // sem o som de obturador: o app dá o próprio retorno visual
+            "-x",  // sem o som de obturador: o app dá o próprio retorno visual
+            "-R\(Int(region.minX)),\(Int(region.minY)),\(Int(region.width)),\(Int(region.height))",
             destination.path,
         ])
 
-        // 1 é o código de "o usuário desistiu" (Esc). Não é erro.
-        if status == 1 { return .cancelled }
-        guard status == 0 else { throw CaptureError.failed(status: status) }
-
-        // Com Ctrl segurado o conteúdo vai para a área de transferência e
-        // nenhum arquivo é criado — é o atalho que o usuário já tem no dedo.
-        guard fileManager.fileExists(atPath: destination.path) else {
-            logger.notice("Captura enviada à área de transferência pelo atalho Ctrl.")
-            return .copiedToPasteboard
+        guard status == 0, fileManager.fileExists(atPath: destination.path) else {
+            throw CaptureError.failed(status: status)
         }
-
         return .captured(url: destination)
+    }
+
+    /// Ponte entre o overlay (callback) e o async daqui.
+    private func selectRegion() async -> CGRect? {
+        await withCheckedContinuation { continuation in
+            overlay.present { rect in
+                continuation.resume(returning: rect)
+            }
+        }
     }
 
     /// Move a captura temporária para a pasta final, com nome por data.
