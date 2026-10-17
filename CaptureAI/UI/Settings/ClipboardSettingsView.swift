@@ -359,8 +359,7 @@ struct ClipboardSettingsView: View {
                     ScreenRecordingPermission.request()
                     refreshPermission()
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(SettingsTheme.accent)
+                .buttonStyle(GradientButtonStyle())
             }
         }
     }

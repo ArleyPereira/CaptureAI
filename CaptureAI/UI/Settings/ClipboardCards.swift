@@ -271,8 +271,7 @@ struct ClipboardEditSheet: View {
                     .buttonStyle(GhostButtonStyle())
                     .keyboardShortcut(.cancelAction)
                 Button("Salvar") { onSave(draft) }
-                    .buttonStyle(.borderedProminent)
-                    .tint(SettingsTheme.accent)
+                    .buttonStyle(GradientButtonStyle())
                     .keyboardShortcut(.defaultAction)
                     .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
