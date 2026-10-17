@@ -404,11 +404,31 @@ final class CaptureEditorView: NSView {
         drag = nil
         draft = nil
         hoveredWindow = nil
-        if let cursorPoint {
-            if model.mode == .window { updateHoveredWindow(at: cursorPoint) }
-            updateCursor(at: cursorPoint)
-        }
         layoutToolbar()
+        syncWithMouse()
+    }
+
+    /// Lê onde o mouse está agora, sem esperar ele se mexer.
+    ///
+    /// O destaque do modo janela vinha só do `mouseMoved`: quem apertava o
+    /// atalho com o cursor parado sobre a área de trabalho (ou sobre uma
+    /// janela) não via nada destacado até mover o mouse. Chamado ao abrir o
+    /// editor e ao trocar de modo.
+    func syncWithMouse() {
+        guard let window else { return }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard bounds.contains(point) else {
+            // O mouse está em outro monitor: este fica sem alvo.
+            cursorPoint = nil
+            hoveredWindow = nil
+            needsDisplay = true
+            return
+        }
+        cursorPoint = point
+        if model.mode == .window {
+            updateHoveredWindow(at: point)
+        }
+        updateCursor(at: point)
         needsDisplay = true
     }
 

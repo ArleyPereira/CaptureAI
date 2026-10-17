@@ -65,6 +65,11 @@ final class CaptureEditorController {
         let target = windows.first { $0.frame.contains(mouse) } ?? windows.first
         target?.makeKeyAndOrderFront(nil)
         target?.makeFirstResponder(target?.editor)
+
+        // Já na tela, cada editor descobre o que está sob o mouse parado.
+        for window in windows {
+            window.editor.syncWithMouse()
+        }
     }
 
     /// Troca de modo vinda de fora — o W segurado junto com o Print Screen.
