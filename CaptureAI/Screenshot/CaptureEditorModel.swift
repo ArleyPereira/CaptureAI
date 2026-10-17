@@ -67,11 +67,13 @@ struct CapturableWindow: Equatable {
             kCGNullWindowID
         ) as? [[String: Any]] else { return [] }
 
-        let ownPID = ProcessInfo.processInfo.processIdentifier
+        // As janelas do próprio CaptureAI entram como as de qualquer app — a
+        // de configurações é uma janela como outra. O editor não corre risco
+        // de se destacar: a lista é montada antes de ele abrir, e a miniatura
+        // flutuante fica acima da camada 0, fora do filtro.
         return list.compactMap { info in
             guard
                 (info[kCGWindowLayer as String] as? Int) == 0,
-                (info[kCGWindowOwnerPID as String] as? Int32) != ownPID,
                 (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.01,
                 let number = info[kCGWindowNumber as String] as? CGWindowID,
                 let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
