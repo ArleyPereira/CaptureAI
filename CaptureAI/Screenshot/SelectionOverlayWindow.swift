@@ -185,6 +185,11 @@ final class SelectionOverlayWindow: NSWindow {
         collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         ignoresMouseEvents = false
         hasShadow = false
+        // Quem segura a janela é o controller, via ARC. Com o padrão (`true`),
+        // o `close()` liberava a janela por conta própria e o ARC liberava de
+        // novo ao soltar a referência — liberação dupla, e o app caía no
+        // primeiro autorelease pool depois da seleção.
+        isReleasedWhenClosed = false
         // A janela é excluída de qualquer gravação de tela. Sem isto, o véu
         // escuro entraria na própria captura que ele está ajudando a compor.
         sharingType = .none
@@ -207,16 +212,19 @@ final class SelectionOverlayWindow: NSWindow {
         set { selectionView.onCancelled = newValue }
     }
 
-    /// Converte a seleção local em coordenadas globais de tela (origem no topo),
-    /// que é o sistema que o `CGDisplay`/`screencapture` usa.
+    /// Converte a seleção local em coordenadas globais de tela com origem no
+    /// topo, que é o sistema que o `screencapture -R` usa.
+    ///
+    /// O Cocoa mede a partir do canto inferior esquerdo do monitor
+    /// **principal** (o primeiro de `NSScreen.screens`); a inversão do eixo Y
+    /// tem que usar a altura dele, não a do monitor mais alto — com um segundo
+    /// monitor acima do principal, as duas diferem e a captura sairia
+    /// deslocada.
     func globalRect(from local: CGRect) -> CGRect {
-        let frame = self.frame
-        let totalHeight = NSScreen.screens
-            .map(\.frame.maxY)
-            .max() ?? frame.maxY
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? frame.height
         return CGRect(
             x: frame.minX + local.minX,
-            y: totalHeight - (frame.minY + local.maxY),
+            y: primaryHeight - (frame.minY + local.maxY),
             width: local.width,
             height: local.height
         )

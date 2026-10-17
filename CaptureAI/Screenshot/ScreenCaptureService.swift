@@ -58,7 +58,11 @@ final class ScreenCaptureService {
         isCapturing = true
         defer { isCapturing = false }
 
-        guard let region = await selectRegion() else { return .cancelled }
+        guard let region = await selectRegion() else {
+            logger.notice("Seleção cancelada.")
+            return .cancelled
+        }
+        logger.notice("Seleção: \(Int(region.minX), privacy: .public),\(Int(region.minY), privacy: .public) \(Int(region.width), privacy: .public)×\(Int(region.height), privacy: .public) pt.")
 
         let destination = fileManager.temporaryDirectory
             .appendingPathComponent("captureai-\(UUID().uuidString).png")
@@ -70,6 +74,7 @@ final class ScreenCaptureService {
         ])
 
         guard status == 0, fileManager.fileExists(atPath: destination.path) else {
+            logger.error("screencapture -R terminou com \(status, privacy: .public) e sem arquivo.")
             throw CaptureError.failed(status: status)
         }
         return .captured(url: destination)

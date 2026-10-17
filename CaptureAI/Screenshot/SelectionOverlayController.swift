@@ -41,12 +41,18 @@ final class SelectionOverlayController {
     private func finish(with rect: CGRect?) {
         let completion = self.completion
         self.completion = nil
-        dismiss()
 
-        // A captura só pode acontecer depois que o véu saiu da tela, senão ele
-        // apareceria na imagem em monitores onde a exclusão de gravação não
-        // vale. Um ciclo de run loop basta para a janela sumir de fato.
-        DispatchQueue.main.async {
+        // Some da tela já, mas a janela só é solta no próximo ciclo: este
+        // método roda de dentro do `mouseUp` da própria view, e desalocar a
+        // janela no meio do evento dela deixa o AppKit com um ponteiro morto.
+        for window in windows {
+            window.orderOut(nil)
+        }
+
+        // A captura também espera esse ciclo: é ele que garante que o véu
+        // saiu de fato da tela antes de a imagem ser tirada.
+        DispatchQueue.main.async { [weak self] in
+            self?.dismiss()
             completion?(rect)
         }
     }
