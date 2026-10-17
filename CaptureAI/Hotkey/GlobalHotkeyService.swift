@@ -107,7 +107,11 @@ nonisolated final class GlobalHotkeyService: GlobalHotkeyServiceProtocol, @unche
         let status = InstallEventHandler(
             GetEventDispatcherTarget(),
             { _, event, userData -> OSStatus in
-                guard let event, let userData else { return noErr }
+                // `noErr` significa "já tratei este evento" e interrompe a
+                // cadeia. Tudo que não for nosso precisa devolver
+                // `eventNotHandledErr`, ou o outro handler do app nunca é
+                // chamado — foi assim que a captura passou a engolir o ditado.
+                guard let event, let userData else { return OSStatus(eventNotHandledErr) }
 
                 let service = Unmanaged<GlobalHotkeyService>
                     .fromOpaque(userData)
@@ -129,7 +133,9 @@ nonisolated final class GlobalHotkeyService: GlobalHotkeyServiceProtocol, @unche
                 )
                 guard readStatus == noErr,
                       firedID.signature == service.hotKeyID.signature,
-                      firedID.id == service.hotKeyID.id else { return noErr }
+                      firedID.id == service.hotKeyID.id else {
+                    return OSStatus(eventNotHandledErr)
+                }
 
                 let kind = GetEventKind(event)
                 if kind == UInt32(kEventHotKeyPressed) {

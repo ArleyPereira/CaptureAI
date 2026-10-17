@@ -85,7 +85,10 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
         let status = InstallEventHandler(
             GetEventDispatcherTarget(),
             { _, event, userData -> OSStatus in
-                guard let event, let userData else { return noErr }
+                // Ver a nota no GlobalHotkeyService: devolver `noErr` aqui
+                // encerraria a cadeia e deixaria o atalho de ditado sem
+                // handler.
+                guard let event, let userData else { return OSStatus(eventNotHandledErr) }
 
                 var firedID = EventHotKeyID()
                 let readStatus = GetEventParameter(
@@ -97,7 +100,7 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
                     nil,
                     &firedID
                 )
-                guard readStatus == noErr else { return noErr }
+                guard readStatus == noErr else { return OSStatus(eventNotHandledErr) }
 
                 let service = Unmanaged<CaptureHotkeyService>
                     .fromOpaque(userData)
@@ -105,7 +108,9 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
 
                 // O atalho de ditado passa por aqui também; ignoramos o que não é nosso.
                 guard firedID.signature == service.hotKeyID.signature,
-                      firedID.id == service.hotKeyID.id else { return noErr }
+                      firedID.id == service.hotKeyID.id else {
+                    return OSStatus(eventNotHandledErr)
+                }
 
                 service.onTriggered?()
                 return noErr
