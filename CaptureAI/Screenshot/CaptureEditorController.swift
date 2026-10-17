@@ -66,9 +66,16 @@ final class CaptureEditorController {
         target?.makeKeyAndOrderFront(nil)
         target?.makeFirstResponder(target?.editor)
 
-        // Já na tela, cada editor descobre o que está sob o mouse parado.
+        // Já na tela, cada editor descobre o que está sob o mouse parado — e
+        // de novo um instante depois, quando a ativação do app terminou e o
+        // sistema já não vai trocar o cursor por cima.
         for window in windows {
             window.editor.syncWithMouse()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            for window in self?.windows ?? [] {
+                window.editor.syncWithMouse()
+            }
         }
     }
 

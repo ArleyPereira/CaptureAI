@@ -456,27 +456,44 @@ final class CaptureEditorView: NSView {
         return NSCursor(image: image, hotSpot: NSPoint(x: 13, y: 13))
     }()
 
+    /// Cursor aplicado por último, também usado como cursor rect da view.
+    private var currentCursor: NSCursor = .crosshair
+
+    /// Aplica o cursor certo para o ponto e o registra como cursor rect.
+    ///
+    /// Só o `set()` não basta: na abertura do editor o app ainda está
+    /// terminando de ficar ativo, e quando a ativação conclui o AppKit
+    /// reaplica os cursor rects da janela por cima — sem um rect nosso,
+    /// voltava a seta padrão até o mouse se mexer.
     private func updateCursor(at point: CGPoint) {
+        let cursor = desiredCursor(at: point)
+        cursor.set()
+        if cursor !== currentCursor {
+            currentCursor = cursor
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: currentCursor)
+    }
+
+    private func desiredCursor(at point: CGPoint) -> NSCursor {
         // Sobre a barra vale a seta do sistema: são botões, não área de captura.
         if !toolbarHost.isHidden, toolbarHost.frame.contains(point) {
-            NSCursor.arrow.set()
-            return
+            return .arrow
         }
         if model.mode == .window {
-            (hoveredWindow != nil ? Self.cameraCursor : NSCursor.arrow).set()
-            return
+            return hoveredWindow != nil ? Self.cameraCursor : .arrow
         }
-        guard let selection else {
-            NSCursor.crosshair.set()
-            return
-        }
+        guard let selection else { return .crosshair }
         if let handle = handle(at: point, in: selection) {
-            cursor(for: handle).set()
-        } else if selection.contains(point) {
-            (model.tool == .adjust ? NSCursor.openHand : NSCursor.crosshair).set()
-        } else {
-            NSCursor.crosshair.set()
+            return cursor(for: handle)
         }
+        if selection.contains(point) {
+            return model.tool == .adjust ? .openHand : .crosshair
+        }
+        return .crosshair
     }
 
     private func cursor(for handle: Handle) -> NSCursor {
