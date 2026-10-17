@@ -130,12 +130,16 @@ final class CaptureThumbnailController {
 
 /// Hospeda a miniatura e a torna arrastável como um arquivo de imagem.
 ///
-/// O arraste leva o caminho de um arquivo PNG gravado no início do arraste.
-/// É o único formato que todos aceitam: o Finder copia, e
-/// apps como Slack, WhatsApp ou o Claude anexam. Uma promessa de arquivo
-/// evitaria o temporário no Finder, mas faz os apps Electron recusarem a
-/// soltura inteira. O arquivo fica fora da pasta de capturas, então o
-/// histórico não muda.
+/// O arraste leva duas formas da mesma imagem, e cada destino usa a sua:
+/// - **Promessa de arquivo** — o Finder informa a pasta e a imagem é gravada
+///   direto ali, com o ícone no ponto exato da soltura. Copiando um arquivo
+///   pronto, o Finder o punha na próxima vaga livre da mesa.
+/// - **Arquivo pronto**, gravado no início do arraste — o único formato que
+///   Slack, WhatsApp e o Claude aceitam. Só a promessa, sem ele, fazia esses
+///   apps recusarem a soltura inteira; o arquivo pronto sob demanda também
+///   não servia.
+///
+/// Nada vai para a pasta de capturas, então o histórico não muda.
 ///
 /// O arraste é AppKit, e não o `.onDrag` do SwiftUI, porque só o
 /// `NSDraggingSource` diz se e onde a imagem foi solta.
@@ -177,12 +181,18 @@ final class DraggableThumbnailHostingView<Content: View>: NSHostingView<Content>
         }
         isDragging = true
 
-        let draggingItem = NSDraggingItem(pasteboardWriter: file.url as NSURL)
+        let writer = PromisedCaptureWriter(png: png, fileName: file.url.lastPathComponent)
+        writer.retainUntilWritten()
+        let provider = CaptureDragProvider(fileType: UTType.png.identifier, delegate: writer)
+        provider.fileURL = file.url
+        let draggingItem = NSDraggingItem(pasteboardWriter: provider)
         draggingItem.setDraggingFrame(bounds, contents: preview)
         dragSource.onEnded = { [weak self] dropped, point in
             self?.isDragging = false
             self?.mouseDownPoint = nil
             file.finish(droppedAt: dropped ? point : nil)
+            // Sem soltura, ou solto num app, a promessa nunca será cobrada.
+            if !dropped || !file.wentToFinder { writer.release() }
         }
         beginDraggingSession(with: [draggingItem], event: event, source: dragSource)
     }
@@ -207,23 +217,71 @@ final class DragFile {
         self.url = url
     }
 
+    /// O destino foi o Finder, que usa a promessa e não este arquivo.
+    private(set) var wentToFinder = false
+
     /// Decide quando o temporário pode sumir, conforme quem recebeu.
     ///
-    /// Arraste cancelado: some na hora. Finder: copia no ato, então alguns
-    /// segundos bastam. Outros apps podem ler muito depois — Slack e WhatsApp
-    /// só leem ao enviar —, e aí o arquivo fica até o prazo geral ou até o
-    /// app fechar.
+    /// Cancelado ou solto no Finder — que grava pela promessa e nem lê este
+    /// arquivo —, some na hora. Em outro app fica: Slack e WhatsApp só leem
+    /// ao enviar, o que pode levar minutos; vale o prazo geral ou o app fechar.
     func finish(droppedAt point: NSPoint?) {
         let folder = url.deletingLastPathComponent()
-        guard let point else {
+        wentToFinder = point.map { DragTemporaryFiles.ownerOfWindow(at: $0) == "Finder" } ?? false
+        if point == nil || wentToFinder {
             try? FileManager.default.removeItem(at: folder)
-            return
         }
-        if DragTemporaryFiles.ownerOfWindow(at: point) == "Finder" {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                try? FileManager.default.removeItem(at: folder)
-            }
+    }
+}
+
+/// Promessa de arquivo para o Finder, com o arquivo pronto para os apps.
+final class CaptureDragProvider: NSFilePromiseProvider {
+    var fileURL: URL?
+
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        [.fileURL] + super.writableTypes(for: pasteboard)
+    }
+
+    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        if type == .fileURL, let fileURL {
+            return (fileURL as NSURL).pasteboardPropertyList(forType: .fileURL)
         }
+        return super.pasteboardPropertyList(forType: type)
+    }
+}
+
+/// Grava a imagem onde o Finder pedir, uma única vez.
+final class PromisedCaptureWriter: NSObject, NSFilePromiseProviderDelegate {
+    private let png: Data
+    private let fileName: String
+    /// Escritores com promessa em aberto: o Finder pode cobrá-la depois de o
+    /// arraste terminar e a miniatura fechar.
+    @MainActor private static var pending: Set<PromisedCaptureWriter> = []
+
+    init(png: Data, fileName: String) {
+        self.png = png
+        self.fileName = fileName
+    }
+
+    @MainActor func retainUntilWritten() { Self.pending.insert(self) }
+    @MainActor func release() { Self.pending.remove(self) }
+
+    func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
+        fileName
+    }
+
+    func filePromiseProvider(
+        _ provider: NSFilePromiseProvider,
+        writePromiseTo url: URL,
+        completionHandler: @escaping (Error?) -> Void
+    ) {
+        do {
+            try png.write(to: url, options: [.atomic])
+            completionHandler(nil)
+        } catch {
+            completionHandler(error)
+        }
+        DispatchQueue.main.async { [self] in release() }
     }
 }
 
