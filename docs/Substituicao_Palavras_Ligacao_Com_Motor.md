@@ -1,9 +1,9 @@
-# VoiceIA — Substituição de palavras ligada ao motor Parakeet
+# CaptureAI — Substituição de palavras ligada ao motor Parakeet
 
 Registro do que foi implementado e do que foi medido.
 Criado em: **2026-08-13** · Atualizado em: **2026-08-15**
 Idioma: português
-Projeto: `/Users/arley/Developer/VoiceIA`
+Projeto: `/Users/arley/Developer/CaptureAI`
 
 ---
 
@@ -19,12 +19,12 @@ FluidAudio não entrega por padrão — sem elas a lista não corrige nada ou
 
 | Peça | Arquivo |
 |---|---|
-| Modelo e validação | `VoiceIA/Transcription/WordReplacement.swift` |
-| Persistência (JSON) | `VoiceIA/Transcription/WordReplacementStore.swift` |
-| Modal de CRUD | `VoiceIA/UI/Settings/WordReplacementsModal.swift` |
-| Download do CTC | `VoiceIA/Transcription/Local/LocalCtcModelStore.swift` |
-| Card em Modelos → Local | `VoiceIA/UI/Settings/LocalModelsSettingsView.swift` |
-| Ligação com o motor | `VoiceIA/Transcription/Local/LocalParakeetTranscriptionService.swift` |
+| Modelo e validação | `CaptureAI/Transcription/WordReplacement.swift` |
+| Persistência (JSON) | `CaptureAI/Transcription/WordReplacementStore.swift` |
+| Modal de CRUD | `CaptureAI/UI/Settings/WordReplacementsModal.swift` |
+| Download do CTC | `CaptureAI/Transcription/Local/LocalCtcModelStore.swift` |
+| Card em Modelos → Local | `CaptureAI/UI/Settings/LocalModelsSettingsView.swift` |
+| Ligação com o motor | `CaptureAI/Transcription/Local/LocalParakeetTranscriptionService.swift` |
 
 O boosting só entra quando **as duas** condições valem: existe substituição
 cadastrada e o CTC está em disco. Fora disso o ditado segue no caminho batch

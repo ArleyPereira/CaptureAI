@@ -4,5 +4,5 @@ xcuserdata/
 *.xcuserstate
 .tmp-fluidaudio/
 
-# Dado do usuário: a lista vive em ~/Library/Application Support/VoiceIA
+# Dado do usuário: a lista vive em ~/Library/Application Support/CaptureAI
 word-replacements.json

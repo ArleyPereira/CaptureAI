@@ -1,9 +1,9 @@
-# VoiceIA — Modelo Parakeet na RAM e o unload por ociosidade (10 min)
+# CaptureAI — Modelo Parakeet na RAM e o unload por ociosidade (10 min)
 
 Documento de referência para retomar e melhorar depois.
 Criado em: **2026-08-11**
 Idioma: português
-Projeto: `/Users/arley/Developer/VoiceIA`
+Projeto: `/Users/arley/Developer/CaptureAI`
 
 ---
 
@@ -17,7 +17,7 @@ paga a recarga do Core ML, que já foi medida custando de **menos de 1 s até 5,
 
 ## 1. O que o app faz hoje
 
-Arquivo: `VoiceIA/Transcription/Local/LocalParakeetTranscriptionService.swift`
+Arquivo: `CaptureAI/Transcription/Local/LocalParakeetTranscriptionService.swift`
 
 | Peça | Comportamento |
 |---|---|
@@ -155,17 +155,17 @@ Nenhum foi implementado. Ordem sugerida:
 
 | Arquivo | O quê |
 |---|---|
-| `VoiceIA/Transcription/Local/LocalParakeetTranscriptionService.swift` | `idleUnloadDelay`, `scheduleIdleUnload`, `warmUpIfNeeded`, `loadManager`, logs de `load`/`infer` |
-| `VoiceIA/App/AppState.swift` | `warmLocalModelsIfNeeded()` e o ponto em que o aquecimento é disparado |
-| `VoiceIA/Transcription/CompositeTranscriptionService.swift` | Roteamento e `unloadCachedLocalModel()` |
-| `VoiceIA/Diagnostics/LatencyTrace.swift` | Marcos `asr` / `gates` usados nas medições acima |
+| `CaptureAI/Transcription/Local/LocalParakeetTranscriptionService.swift` | `idleUnloadDelay`, `scheduleIdleUnload`, `warmUpIfNeeded`, `loadManager`, logs de `load`/`infer` |
+| `CaptureAI/App/AppState.swift` | `warmLocalModelsIfNeeded()` e o ponto em que o aquecimento é disparado |
+| `CaptureAI/Transcription/CompositeTranscriptionService.swift` | Roteamento e `unloadCachedLocalModel()` |
+| `CaptureAI/Diagnostics/LatencyTrace.swift` | Marcos `asr` / `gates` usados nas medições acima |
 
 ---
 
 ## 8. Como medir de novo
 
 ```bash
-rtk proxy log show --predicate 'subsystem == "dev.arley.santana.VoiceIA"' --last 45m --style compact --info
+rtk proxy log show --predicate 'subsystem == "dev.arley.santana.CaptureAI"' --last 45m --style compact --info
 ```
 
 Roteiro:
