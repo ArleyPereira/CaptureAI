@@ -4,6 +4,8 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        // O que sobrou de uma sessão que terminou sem fechar direito.
+        DragTemporaryFiles.removeAll()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -11,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // tamanho final do pacote. Chamada síncrona: estamos na main thread, e
         // um `Task` aqui só entraria na fila enquanto o processo morre.
         ParakeetFastDownloader.purgeActivePartials()
+        // Arquivos criados para soltar capturas em outros apps.
+        DragTemporaryFiles.removeAll()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

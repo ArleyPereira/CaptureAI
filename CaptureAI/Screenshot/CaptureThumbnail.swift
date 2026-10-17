@@ -130,13 +130,15 @@ final class CaptureThumbnailController {
 
 /// Hospeda a miniatura e a torna arrastável como um arquivo de imagem.
 ///
-/// O arraste leva uma *promessa* de arquivo, não um arquivo pronto: quando a
-/// pessoa solta numa pasta, o Finder informa o destino e a imagem é gravada
-/// direto ali. Não existe cópia temporária — nada sobra para apagar depois —
-/// e nada entra na pasta de capturas, então o histórico não muda.
+/// O arraste leva o caminho de um arquivo PNG gravado no início do arraste.
+/// É o único formato que todos aceitam: o Finder copia, e
+/// apps como Slack, WhatsApp ou o Claude anexam. Uma promessa de arquivo
+/// evitaria o temporário no Finder, mas faz os apps Electron recusarem a
+/// soltura inteira. O arquivo fica fora da pasta de capturas, então o
+/// histórico não muda.
 ///
 /// O arraste é AppKit, e não o `.onDrag` do SwiftUI, porque só o
-/// `NSDraggingSource` diz se a imagem foi solta — é isso que fecha a miniatura.
+/// `NSDraggingSource` diz se e onde a imagem foi solta.
 final class DraggableThumbnailHostingView<Content: View>: NSHostingView<Content> {
     var image: CGImage?
     var preview: NSImage?
@@ -163,31 +165,26 @@ final class DraggableThumbnailHostingView<Content: View>: NSHostingView<Content>
         // Uma folga antes de virar arraste, para um clique trêmulo nos botões
         // não ser tomado por arrastar.
         let distance = hypot(event.locationInWindow.x - start.x, event.locationInWindow.y - start.y)
+        // O arquivo existe desde o início do arraste: gerado sob demanda, o
+        // Finder chegava a pedi-lo mas não copiava.
         guard distance > 4,
               let image,
-              let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+              let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]),
+              let file = DragFile(png: png)
         else {
             super.mouseDragged(with: event)
             return
         }
         isDragging = true
 
-        let writer = CapturePromiseWriter(png: png)
-        let provider = CaptureFilePromiseProvider(fileType: UTType.png.identifier, delegate: writer)
-        provider.png = png
-        // O Finder pode pedir o arquivo depois que o arraste terminou e a
-        // miniatura já fechou; o escritor se mantém vivo até gravar.
-        writer.retainUntilWritten()
-
-        let item = NSDraggingItem(pasteboardWriter: provider)
-        item.setDraggingFrame(bounds, contents: preview)
-        dragSource.onEnded = { [weak self] dropped in
+        let draggingItem = NSDraggingItem(pasteboardWriter: file.url as NSURL)
+        draggingItem.setDraggingFrame(bounds, contents: preview)
+        dragSource.onEnded = { [weak self] dropped, point in
             self?.isDragging = false
             self?.mouseDownPoint = nil
-            // Solto em lugar nenhum, a promessa nunca será cobrada.
-            if !dropped { writer.release() }
+            file.finish(droppedAt: dropped ? point : nil)
         }
-        beginDraggingSession(with: [item], event: event, source: dragSource)
+        beginDraggingSession(with: [draggingItem], event: event, source: dragSource)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -197,57 +194,105 @@ final class DraggableThumbnailHostingView<Content: View>: NSHostingView<Content>
     }
 }
 
-/// Promessa de arquivo que também carrega a imagem em si.
-///
-/// O Finder usa a promessa e grava no destino. Apps que não trabalham com
-/// promessas — Mail, Slack, navegadores — recebem o PNG direto da área de
-/// arraste.
-final class CaptureFilePromiseProvider: NSFilePromiseProvider {
-    var png: Data?
+/// O arquivo temporário de um arraste.
+final class DragFile {
+    let url: URL
 
-    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        super.writableTypes(for: pasteboard) + [.png]
+    init?(png: Data) {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        guard let url = DragTemporaryFiles.write(png, named: "captureai-\(formatter.string(from: Date())).png") else {
+            return nil
+        }
+        self.url = url
     }
 
-    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
-        type == .png ? png : super.pasteboardPropertyList(forType: type)
+    /// Decide quando o temporário pode sumir, conforme quem recebeu.
+    ///
+    /// Arraste cancelado: some na hora. Finder: copia no ato, então alguns
+    /// segundos bastam. Outros apps podem ler muito depois — Slack e WhatsApp
+    /// só leem ao enviar —, e aí o arquivo fica até o prazo geral ou até o
+    /// app fechar.
+    func finish(droppedAt point: NSPoint?) {
+        let folder = url.deletingLastPathComponent()
+        guard let point else {
+            try? FileManager.default.removeItem(at: folder)
+            return
+        }
+        if DragTemporaryFiles.ownerOfWindow(at: point) == "Finder" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                try? FileManager.default.removeItem(at: folder)
+            }
+        }
     }
 }
 
-/// Grava a imagem onde o Finder pedir, uma única vez.
-final class CapturePromiseWriter: NSObject, NSFilePromiseProviderDelegate {
-    private let png: Data
-    private let fileName: String
-    /// Escritores com promessa em aberto. Sem esta referência, o escritor
-    /// sumiria junto com a miniatura antes de o Finder cobrar o arquivo.
-    @MainActor private static var pending: Set<CapturePromiseWriter> = []
-
-    init(png: Data) {
-        self.png = png
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        self.fileName = "captureai-\(formatter.string(from: Date())).png"
+/// Arquivos criados para soltar a captura em outros apps.
+enum DragTemporaryFiles {
+    private static var root: URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("CaptureAI-drag", isDirectory: true)
     }
 
-    @MainActor func retainUntilWritten() { Self.pending.insert(self) }
-    @MainActor func release() { Self.pending.remove(self) }
+    /// Prazo para apps que leem o arquivo só ao enviar.
+    private static let lifetime: TimeInterval = 600
 
-    func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
-        fileName
-    }
-
-    func filePromiseProvider(
-        _ provider: NSFilePromiseProvider,
-        writePromiseTo url: URL,
-        completionHandler: @escaping (Error?) -> Void
-    ) {
+    static func write(_ png: Data, named name: String) -> URL? {
+        removeExpired()
+        // Uma subpasta por arraste: o nome do arquivo fica limpo e dois
+        // arrastes seguidos não disputam o mesmo caminho.
+        let folder = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = folder.appendingPathComponent(name)
         do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try png.write(to: url, options: [.atomic])
-            completionHandler(nil)
+            return url
         } catch {
-            completionHandler(error)
+            return nil
         }
-        DispatchQueue.main.async { [self] in release() }
+    }
+
+    /// App dono da janela mais à frente num ponto da tela (coordenadas do
+    /// Cocoa). Inclui a mesa, que é uma janela do Finder.
+    ///
+    /// Só conta janelas comuns (camada 0) e a mesa (camadas negativas): o Dock
+    /// mantém uma janela transparente do tamanho da tela numa camada acima, e
+    /// ela seria sempre a "de cima".
+    static func ownerOfWindow(at point: NSPoint) -> String? {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        let target = CGPoint(x: point.x, y: primaryHeight - point.y)
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        for info in list {
+            guard (info[kCGWindowOwnerPID as String] as? Int32) != ownPID,
+                  (info[kCGWindowLayer as String] as? Int ?? 0) <= 0,
+                  (info[kCGWindowOwnerName as String] as? String) != "Window Server",
+                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.01,
+                  let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: bounds),
+                  rect.contains(target)
+            else { continue }
+            return info[kCGWindowOwnerName as String] as? String
+        }
+        return nil
+    }
+
+    static func removeExpired() {
+        let fm = FileManager.default
+        guard let folders = try? fm.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.creationDateKey], options: [.skipsHiddenFiles]
+        ) else { return }
+        let limit = Date().addingTimeInterval(-lifetime)
+        for folder in folders {
+            let created = (try? folder.resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast
+            if created < limit { try? fm.removeItem(at: folder) }
+        }
+    }
+
+    /// Apaga tudo. Chamado quando o app abre e quando fecha.
+    static func removeAll() {
+        try? FileManager.default.removeItem(at: root)
     }
 }
 
@@ -255,7 +300,7 @@ final class CapturePromiseWriter: NSObject, NSFilePromiseProviderDelegate {
 /// solta em algum lugar.
 final class ThumbnailDragSource: NSObject, NSDraggingSource {
     var onDropped: (() -> Void)?
-    var onEnded: ((_ dropped: Bool) -> Void)?
+    var onEnded: ((_ dropped: Bool, _ point: NSPoint) -> Void)?
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         // Cópia: soltar numa pasta nunca deve "mover" a captura de lugar algum.
@@ -264,7 +309,7 @@ final class ThumbnailDragSource: NSObject, NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         let dropped = operation != []
-        onEnded?(dropped)
+        onEnded?(dropped, screenPoint)
         if dropped { onDropped?() }
     }
 }
