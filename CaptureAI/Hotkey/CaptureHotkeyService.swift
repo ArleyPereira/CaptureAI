@@ -3,9 +3,11 @@ import Foundation
 
 /// Monitoramento global do atalho de captura de tela.
 ///
-/// O atalho principal abre a captura de área. Enquanto ele está **segurado**,
-/// o W também vira atalho e troca para captura de janela — é o acorde
-/// Print Screen + W. O macOS não registra acorde de duas teclas comuns, então
+/// A captura de área começa ao **soltar** o atalho principal, não ao apertar:
+/// enquanto ele está segurado a pessoa ainda pode estar no meio do acorde
+/// Print Screen + W, e escurecer a tela antes da hora atropelaria a escolha.
+/// Com o principal segurado, o W vira atalho e abre direto a captura de
+/// janela; aí o soltar não faz mais nada. O macOS não registra acorde de duas teclas comuns, então
 /// o W é registrado ao pressionar e removido ao soltar: fora desse instante
 /// ele volta a digitar W normalmente em qualquer app.
 ///
@@ -14,10 +16,15 @@ import Foundation
 /// `eventNotHandledErr` para o que não é seu — devolver `noErr` encerraria a
 /// cadeia e o atalho de ditado deixaria de funcionar.
 nonisolated final class CaptureHotkeyService: @unchecked Sendable {
-    /// Chamado quando o atalho principal é pressionado.
+    /// Captura de área: o atalho principal foi solto sem acorde.
     var onTriggered: (@Sendable () -> Void)?
-    /// Chamado quando W é pressionado com o atalho principal segurado.
+    /// Captura de janela: W apertado com o atalho principal segurado.
     var onWindowModeRequested: (@Sendable () -> Void)?
+
+    /// O atalho principal está pressionado agora.
+    private var isMainHeld = false
+    /// O acorde já disparou a captura de janela; o soltar não abre outra.
+    private var chordConsumed = false
 
     private var hotKeyRef: EventHotKeyRef?
     private var modeKeyRef: EventHotKeyRef?
@@ -143,11 +150,19 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
     private func handle(id: UInt32, pressed: Bool) -> OSStatus {
         switch (id, pressed) {
         case (mainID.id, true):
+            // A repetição automática de tecla reenviaria o "pressionado".
+            guard !isMainHeld else { break }
+            isMainHeld = true
+            chordConsumed = false
             registerModeKey()
-            onTriggered?()
         case (mainID.id, false):
+            isMainHeld = false
             unregisterModeKey()
+            if !chordConsumed { onTriggered?() }
+            chordConsumed = false
         case (modeKeyID.id, true):
+            guard isMainHeld, !chordConsumed else { break }
+            chordConsumed = true
             onWindowModeRequested?()
         case (modeKeyID.id, false):
             break

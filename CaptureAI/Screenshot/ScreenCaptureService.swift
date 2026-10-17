@@ -52,7 +52,10 @@ final class ScreenCaptureService {
         case cancelled
     }
 
-    func captureInteractively() async throws -> Outcome {
+    /// Há captura congelando ou editor aberto.
+    var isBusy: Bool { isCapturing || editor.isPresenting }
+
+    func captureInteractively(mode: CaptureMode = .area) async throws -> Outcome {
         guard !isCapturing, !editor.isPresenting else { return .cancelled }
 
         guard ScreenRecordingPermission.isGranted else {
@@ -82,7 +85,7 @@ final class ScreenCaptureService {
         let result = await withCheckedContinuation { continuation in
             editor.present(
                 frozen,
-                mode: pendingMode ?? .area,
+                mode: pendingMode ?? mode,
                 capturableWindows: capturable
             ) { result in
                 continuation.resume(returning: result)

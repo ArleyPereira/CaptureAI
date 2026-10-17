@@ -24,13 +24,13 @@ final class ScreenCaptureCoordinator {
     }
 
     /// Começa uma captura. Chamado pelo atalho global e pelo botão da aba.
-    func beginCapture() {
-        Task { await performCapture() }
+    func beginCapture(mode: CaptureMode = .area) {
+        Task { await performCapture(mode: mode) }
     }
 
-    private func performCapture() async {
+    private func performCapture(mode: CaptureMode) async {
         do {
-            switch try await service.captureInteractively() {
+            switch try await service.captureInteractively(mode: mode) {
             case .cancelled:
                 return
             case .copy(let image, let scale):
@@ -88,9 +88,14 @@ final class ScreenCaptureCoordinator {
         )
     }
 
-    /// Pede o modo janela ao editor que está abrindo ou aberto.
+    /// Acorde Print Screen + W: abre direto no modo janela ou, se o editor
+    /// já estiver aberto ou abrindo, troca para ele.
     func requestWindowMode() {
-        service.requestWindowMode()
+        if service.isBusy {
+            service.requestWindowMode()
+        } else {
+            beginCapture(mode: .window)
+        }
     }
 
     /// Grava o PNG com nome por data, sem sobrescrever nada que já exista.
