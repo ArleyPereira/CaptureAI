@@ -48,6 +48,14 @@ struct CapturableWindow: Equatable {
     let frame: CGRect
     let ownerName: String
 
+    /// A área de trabalho entra como uma janela a mais, a do fundo. O id 0
+    /// nunca é usado por uma janela de verdade.
+    static func desktop(frame: CGRect) -> CapturableWindow {
+        CapturableWindow(id: 0, frame: frame, ownerName: "Área de trabalho")
+    }
+
+    var isDesktop: Bool { id == 0 }
+
     /// Janelas comuns visíveis, da frente para trás.
     ///
     /// A ordem importa: com janelas sobrepostas, a destacada tem que ser a

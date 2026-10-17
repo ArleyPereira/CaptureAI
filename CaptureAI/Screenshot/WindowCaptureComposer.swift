@@ -20,6 +20,16 @@ enum WindowCaptureComposer {
 
     static func compose(_ target: CapturableWindow, on screen: NSScreen) async throws -> CGImage {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+
+        // A área de trabalho é só o papel de parede: sem ícones, sem margem,
+        // sem sombra — ela já é o fundo.
+        if target.isDesktop {
+            guard let wallpaper = try await captureWallpaper(
+                content: content, screen: screen, scale: screen.backingScaleFactor
+            ) else { throw ComposeError.windowGone }
+            return wallpaper
+        }
+
         guard let scWindow = content.windows.first(where: { $0.windowID == target.id }) else {
             throw ComposeError.windowGone
         }

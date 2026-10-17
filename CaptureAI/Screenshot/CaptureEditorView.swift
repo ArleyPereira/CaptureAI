@@ -130,18 +130,17 @@ final class CaptureEditorView: NSView {
 
     /// Véu com a janela sob o mouse acesa e tingida, como uma prévia do
     /// que o clique vai levar.
+    /// Sem véu: no modo janela a tela fica como está, e só o alvo sob o mouse
+    /// ganha o tom azul e a borda. Escurecer tudo esconderia justamente as
+    /// janelas entre as quais a pessoa está escolhendo.
     private func drawWindowMode(_ context: CGContext) {
-        let veil = CGMutablePath()
-        veil.addRect(bounds)
         if let hovered = hoveredWindow {
-            veil.addPath(CGPath(roundedRect: hovered.rect, cornerWidth: 12, cornerHeight: 12, transform: nil))
-        }
-        context.addPath(veil)
-        context.setFillColor(NSColor.black.withAlphaComponent(0.45).cgColor)
-        context.fillPath(using: .evenOdd)
-
-        if let hovered = hoveredWindow {
-            let shape = CGPath(roundedRect: hovered.rect, cornerWidth: 12, cornerHeight: 12, transform: nil)
+            // A área de trabalho ocupa o monitor inteiro e não tem cantos
+            // arredondados; a borda entra um pouco para não sumir na beira.
+            let isDesktop = hovered.window.isDesktop
+            let rect = isDesktop ? bounds.insetBy(dx: 1.5, dy: 1.5) : hovered.rect
+            let radius: CGFloat = isDesktop ? 0 : 12
+            let shape = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
             context.addPath(shape)
             context.setFillColor(Self.accent.withAlphaComponent(0.16).cgColor)
             context.fillPath()
@@ -150,7 +149,7 @@ final class CaptureEditorView: NSView {
             context.setLineWidth(2.5)
             context.strokePath()
         }
-        drawHint(context, text: "Clique numa janela para capturar  ·  W para área  ·  Esc para sair")
+        drawHint(context, text: "Clique numa janela ou na área de trabalho  ·  W para área  ·  Esc para sair")
     }
 
     private static let accent = NSColor(red: 0.35, green: 0.78, blue: 0.98, alpha: 1)
@@ -360,13 +359,29 @@ final class CaptureEditorView: NSView {
     }
 
     /// Primeira janela, da frente para trás, que contém o ponto.
+    /// Primeira janela, da frente para trás, que contém o ponto. Fora de
+    /// todas, o alvo é a área de trabalho deste monitor — ela se comporta como
+    /// mais uma janela, a do fundo.
     private func updateHoveredWindow(at point: CGPoint) {
         let found = model.windows.lazy
             .map { ($0, self.viewRect(fromGlobal: $0.frame)) }
             .first { $0.1.contains(point) }
-        let changed = found?.0.id != hoveredWindow?.window.id
-        hoveredWindow = found.map { (window: $0.0, rect: $0.1) }
+            ?? (desktopTarget, bounds)
+        let changed = found.0 != hoveredWindow?.window
+        hoveredWindow = (window: found.0, rect: found.1)
         if changed { needsDisplay = true }
+    }
+
+    /// A área de trabalho deste monitor como alvo de captura.
+    private var desktopTarget: CapturableWindow {
+        let screenFrame = window?.screen?.frame ?? window?.frame ?? .zero
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screenFrame.height
+        return .desktop(frame: CGRect(
+            x: screenFrame.minX,
+            y: primaryHeight - screenFrame.maxY,
+            width: screenFrame.width,
+            height: screenFrame.height
+        ))
     }
 
     /// Converte um retângulo global (origem no topo do monitor principal)
