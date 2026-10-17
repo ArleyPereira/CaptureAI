@@ -34,16 +34,49 @@ enum AnnotationTool: String, CaseIterable, Identifiable {
     }
 }
 
-/// Cores das anotações. Poucas de propósito: uma paleta enxuta se escolhe sem
-/// pensar, e todas se destacam sobre conteúdo claro e escuro.
-enum AnnotationPalette {
-    static let colors: [NSColor] = [
-        .systemRed,
-        .systemYellow,
-        NSColor(red: 0.35, green: 0.78, blue: 0.98, alpha: 1),
-        .systemGreen,
-        .white,
-    ]
+/// Modo do editor: arrastar uma área ou clicar numa janela.
+enum CaptureMode {
+    case area
+    case window
+}
+
+/// Uma janela que pode ser capturada, como estava no instante do atalho.
+struct CapturableWindow: Equatable {
+    let id: CGWindowID
+    /// Em coordenadas globais com origem no topo do monitor principal — o
+    /// sistema do `CGWindowList` e do ScreenCaptureKit.
+    let frame: CGRect
+    let ownerName: String
+
+    /// Janelas comuns visíveis, da frente para trás.
+    ///
+    /// A ordem importa: com janelas sobrepostas, a destacada tem que ser a
+    /// que está por cima no ponto do mouse. Só o `CGWindowList` garante essa
+    /// ordem; a lista do ScreenCaptureKit não.
+    static func onScreen() -> [CapturableWindow] {
+        guard let list = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else { return [] }
+
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        return list.compactMap { info in
+            guard
+                (info[kCGWindowLayer as String] as? Int) == 0,
+                (info[kCGWindowOwnerPID as String] as? Int32) != ownPID,
+                (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.01,
+                let number = info[kCGWindowNumber as String] as? CGWindowID,
+                let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                let frame = CGRect(dictionaryRepresentation: boundsDict),
+                frame.width > 60, frame.height > 40
+            else { return nil }
+            return CapturableWindow(
+                id: number,
+                frame: frame,
+                ownerName: info[kCGWindowOwnerName as String] as? String ?? ""
+            )
+        }
+    }
 }
 
 /// Uma anotação, em pontos da tela onde foi desenhada.
@@ -166,12 +199,17 @@ enum AnnotationRenderer {
 @MainActor
 final class CaptureEditorModel {
     var tool: AnnotationTool = .adjust
-    var color: NSColor = AnnotationPalette.colors[0]
+    var color: NSColor = .systemRed
     var annotations: [Annotation] = []
+    var mode: CaptureMode = .area
+    /// Janelas visíveis no instante do atalho, para o modo janela.
+    var windows: [CapturableWindow] = []
 
     @ObservationIgnored var onCopy: () -> Void = {}
     @ObservationIgnored var onSave: () -> Void = {}
     @ObservationIgnored var onCancel: () -> Void = {}
+    @ObservationIgnored var onCaptureWindow: (CapturableWindow) -> Void = { _ in }
+    @ObservationIgnored var onOpenColorPanel: () -> Void = {}
     /// Pede redesenho e devolve o teclado ao editor depois de um clique na barra.
     @ObservationIgnored var onChange: () -> Void = {}
 
@@ -194,9 +232,17 @@ final class CaptureEditorModel {
         onChange()
     }
 
-    func reset() {
+    func toggleMode() {
+        mode = (mode == .area) ? .window : .area
+        annotations = []
+        onChange()
+    }
+
+    func reset(mode: CaptureMode, windows: [CapturableWindow]) {
         tool = .adjust
         annotations = []
+        self.mode = mode
+        self.windows = windows
     }
 }
 
@@ -222,24 +268,18 @@ struct CaptureToolbar: View {
 
             separator
 
-            ForEach(Array(AnnotationPalette.colors.enumerated()), id: \.offset) { _, color in
-                let isSelected = model.color == color
-                Button {
-                    model.select(color)
-                } label: {
-                    Circle()
-                        .fill(Color(nsColor: color))
-                        .frame(width: 13, height: 13)
-                        .overlay {
-                            Circle().strokeBorder(.white.opacity(isSelected ? 0.95 : 0.2), lineWidth: isSelected ? 2 : 1)
-                                .frame(width: isSelected ? 19 : 13, height: isSelected ? 19 : 13)
-                        }
-                        .frame(width: 24, height: 30)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .animation(.easeOut(duration: 0.12), value: isSelected)
+            Button {
+                model.onOpenColorPanel()
+            } label: {
+                Circle()
+                    .fill(Color(nsColor: model.color))
+                    .frame(width: 16, height: 16)
+                    .overlay { Circle().strokeBorder(.white.opacity(0.9), lineWidth: 2) }
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .help("Cor")
 
             separator
 

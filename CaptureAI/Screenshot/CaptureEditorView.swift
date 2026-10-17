@@ -32,6 +32,8 @@ final class CaptureEditorView: NSView {
 
     private var drag: Drag?
     private var draft: Annotation?
+    /// Janela sob o mouse no modo janela, já em coordenadas desta view.
+    private var hoveredWindow: (window: CapturableWindow, rect: CGRect)?
     private var cursorPoint: CGPoint?
     private let toolbarHost: NSHostingView<CaptureToolbar>
 
@@ -80,6 +82,11 @@ final class CaptureEditorView: NSView {
         context.interpolationQuality = .high
         context.draw(frozen, in: bounds)
 
+        if model.mode == .window {
+            drawWindowMode(context)
+            return
+        }
+
         // Véu em tudo, menos na seleção: par-ímpar recorta o miolo.
         let veil = CGMutablePath()
         veil.addRect(bounds)
@@ -90,7 +97,7 @@ final class CaptureEditorView: NSView {
 
         guard let selection else {
             drawGuides(context)
-            drawHint(context)
+            drawHint(context, text: "Arraste para selecionar  ·  W para janela  ·  Esc para sair")
             return
         }
 
@@ -121,6 +128,33 @@ final class CaptureEditorView: NSView {
         }
     }
 
+    /// Véu com a janela sob o mouse acesa e tingida, como uma prévia do
+    /// que o clique vai levar.
+    private func drawWindowMode(_ context: CGContext) {
+        let veil = CGMutablePath()
+        veil.addRect(bounds)
+        if let hovered = hoveredWindow {
+            veil.addPath(CGPath(roundedRect: hovered.rect, cornerWidth: 12, cornerHeight: 12, transform: nil))
+        }
+        context.addPath(veil)
+        context.setFillColor(NSColor.black.withAlphaComponent(0.45).cgColor)
+        context.fillPath(using: .evenOdd)
+
+        if let hovered = hoveredWindow {
+            let shape = CGPath(roundedRect: hovered.rect, cornerWidth: 12, cornerHeight: 12, transform: nil)
+            context.addPath(shape)
+            context.setFillColor(Self.accent.withAlphaComponent(0.16).cgColor)
+            context.fillPath()
+            context.addPath(shape)
+            context.setStrokeColor(Self.accent.withAlphaComponent(0.95).cgColor)
+            context.setLineWidth(2.5)
+            context.strokePath()
+        }
+        drawHint(context, text: "Clique numa janela para capturar  ·  W para área  ·  Esc para sair")
+    }
+
+    private static let accent = NSColor(red: 0.35, green: 0.78, blue: 0.98, alpha: 1)
+
     /// Linhas guia cruzando o monitor sob o mouse, antes da seleção.
     private func drawGuides(_ context: CGContext) {
         guard let point = cursorPoint else { return }
@@ -136,8 +170,7 @@ final class CaptureEditorView: NSView {
     }
 
     /// Dica discreta no topo, só enquanto nada foi selecionado.
-    private func drawHint(_ context: CGContext) {
-        let text = "Arraste para selecionar  ·  Esc para sair"
+    private func drawHint(_ context: CGContext, text: String) {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 12.5, weight: .medium),
             .foregroundColor: NSColor.white.withAlphaComponent(0.92),
@@ -192,7 +225,7 @@ final class CaptureEditorView: NSView {
 
     /// Abaixo da seleção, alinhada à direita; acima ou por dentro quando falta espaço.
     private func layoutToolbar() {
-        guard let selection, !isCreating else {
+        guard let selection, !isCreating, model.mode == .area else {
             toolbarHost.isHidden = true
             return
         }
@@ -219,6 +252,14 @@ final class CaptureEditorView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+
+        if model.mode == .window {
+            updateHoveredWindow(at: point)
+            if let hovered = hoveredWindow {
+                model.onCaptureWindow(hovered.window)
+            }
+            return
+        }
 
         if let selection {
             if let handle = handle(at: point, in: selection) {
@@ -305,16 +346,91 @@ final class CaptureEditorView: NSView {
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         cursorPoint = point
+        if model.mode == .window {
+            updateHoveredWindow(at: point)
+        }
         updateCursor(at: point)
         if selection == nil { needsDisplay = true }
     }
 
     override func mouseExited(with event: NSEvent) {
         cursorPoint = nil
-        if selection == nil { needsDisplay = true }
+        hoveredWindow = nil
+        needsDisplay = true
     }
 
+    /// Primeira janela, da frente para trás, que contém o ponto.
+    private func updateHoveredWindow(at point: CGPoint) {
+        let found = model.windows.lazy
+            .map { ($0, self.viewRect(fromGlobal: $0.frame)) }
+            .first { $0.1.contains(point) }
+        let changed = found?.0.id != hoveredWindow?.window.id
+        hoveredWindow = found.map { (window: $0.0, rect: $0.1) }
+        if changed { needsDisplay = true }
+    }
+
+    /// Converte um retângulo global (origem no topo do monitor principal)
+    /// para as coordenadas desta view.
+    private func viewRect(fromGlobal rect: CGRect) -> CGRect {
+        guard let screenFrame = window?.screen?.frame ?? window?.frame else { return .zero }
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screenFrame.height
+        let cocoaY = primaryHeight - rect.maxY
+        return CGRect(
+            x: rect.minX - screenFrame.minX,
+            y: cocoaY - screenFrame.minY,
+            width: rect.width,
+            height: rect.height
+        )
+    }
+
+    /// Chamado quando o modo muda: a seleção de área não vale no modo janela.
+    func modeDidChange() {
+        selection = nil
+        drag = nil
+        draft = nil
+        hoveredWindow = nil
+        if let cursorPoint {
+            if model.mode == .window { updateHoveredWindow(at: cursorPoint) }
+            updateCursor(at: cursorPoint)
+        }
+        layoutToolbar()
+        needsDisplay = true
+    }
+
+    /// Posição da barra em coordenadas de tela, para abrir o seletor de cor
+    /// ao lado dela.
+    var toolbarScreenFrame: CGRect? {
+        guard !toolbarHost.isHidden, let window else { return nil }
+        return window.convertToScreen(convert(toolbarHost.frame, to: nil))
+    }
+
+    private static let cameraCursor: NSCursor = {
+        let size = NSSize(width: 26, height: 26)
+        let image = NSImage(size: size, flipped: false) { rect in
+            NSColor.black.withAlphaComponent(0.75).setFill()
+            NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 1), xRadius: 7, yRadius: 7).fill()
+            let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+                .applying(.init(paletteColors: [.white]))
+            if let symbol = NSImage(systemSymbolName: "camera.fill", accessibilityDescription: nil)?
+                .withSymbolConfiguration(config) {
+                let s = symbol.size
+                symbol.draw(in: NSRect(x: (rect.width - s.width) / 2, y: (rect.height - s.height) / 2, width: s.width, height: s.height))
+            }
+            return true
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: 13, y: 13))
+    }()
+
     private func updateCursor(at point: CGPoint) {
+        // Sobre a barra vale a seta do sistema: são botões, não área de captura.
+        if !toolbarHost.isHidden, toolbarHost.frame.contains(point) {
+            NSCursor.arrow.set()
+            return
+        }
+        if model.mode == .window {
+            (hoveredWindow != nil ? Self.cameraCursor : NSCursor.arrow).set()
+            return
+        }
         guard let selection else {
             NSCursor.crosshair.set()
             return
@@ -341,21 +457,32 @@ final class CaptureEditorView: NSView {
 
     // MARK: - Teclado
 
-    /// ⌘C, ⌘S e ⌘Z chegam como equivalentes de teclado, antes do `keyDown`.
+    /// C, S e Z com ⌘ ou Ctrl. Os dois valem porque é comum trocar ⌘ e Ctrl
+    /// nos Ajustes para imitar o teclado do Windows — e aí qualquer uma das
+    /// duas teclas físicas pode ser a que o dedo procura. No editor o Ctrl não
+    /// tem outra função que pudesse conflitar.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard event.modifierFlags.contains(.command) else { return super.performKeyEquivalent(with: event) }
+        handleShortcut(event) || super.performKeyEquivalent(with: event)
+    }
+
+    private func handleShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags.contains(.command) || flags.contains(.control) else { return false }
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "c": model.onCopy(); return true
         case "s": model.onSave(); return true
         case "z": model.undo(); return true
-        default: return super.performKeyEquivalent(with: event)
+        default: return false
         }
     }
 
     override func keyDown(with event: NSEvent) {
+        // Ctrl+letra nem sempre passa por `performKeyEquivalent`.
+        if handleShortcut(event) { return }
         switch event.keyCode {
         case 53: model.onCancel()                       // Esc
         case 36, 76: if selection != nil { model.onCopy() }  // Enter
+        case 13: model.toggleMode()                     // W
         default: super.keyDown(with: event)
         }
     }

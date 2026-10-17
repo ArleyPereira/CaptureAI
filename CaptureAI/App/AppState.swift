@@ -295,6 +295,11 @@ final class AppState {
                 self?.captureCoordinator.beginCapture()
             }
         }
+        captureHotkeyService.onWindowModeRequested = { [weak self] in
+            Task { @MainActor in
+                self?.captureCoordinator.requestWindowMode()
+            }
+        }
         let hotkey = settings.captureHotkey
         captureHotkeyService.start(keyCode: hotkey.keyCode, modifiers: hotkey.modifiers)
     }

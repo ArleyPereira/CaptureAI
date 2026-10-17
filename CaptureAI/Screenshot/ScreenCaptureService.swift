@@ -29,7 +29,30 @@ final class ScreenCaptureService {
     /// Impede abrir um segundo editor por cima do primeiro.
     private(set) var isCapturing = false
 
-    func captureInteractively() async throws -> CaptureEditorResult {
+    /// Modo pedido antes de o editor terminar de abrir — o W segurado com o
+    /// Print Screen chega enquanto a tela ainda está sendo congelada.
+    private var pendingMode: CaptureMode?
+
+    /// Pede o modo janela. Vale para o editor aberto ou para o que está abrindo.
+    func requestWindowMode() {
+        if editor.isPresenting {
+            editor.setMode(.window)
+        } else if isCapturing {
+            pendingMode = .window
+        }
+    }
+
+    /// O que chega ao coordenador: sempre uma imagem pronta e o que fazer com ela.
+    enum Outcome {
+        case copy(CGImage, scale: CGFloat)
+        case save(CGImage, scale: CGFloat)
+        /// Captura de janela: vai para a área de transferência e ganha a
+        /// miniatura flutuante — é o único modo sem barra de ações na tela.
+        case window(CGImage, scale: CGFloat)
+        case cancelled
+    }
+
+    func captureInteractively() async throws -> Outcome {
         guard !isCapturing, !editor.isPresenting else { return .cancelled }
 
         guard ScreenRecordingPermission.isGranted else {
@@ -39,7 +62,12 @@ final class ScreenCaptureService {
         }
 
         isCapturing = true
-        defer { isCapturing = false }
+        defer {
+            isCapturing = false
+            pendingMode = nil
+        }
+        // Tirada antes do congelamento: depois dele o editor já estaria por cima.
+        let capturable = CapturableWindow.onScreen()
 
         let frozen: [ScreenFreezer.FrozenScreen]
         do {
@@ -52,16 +80,29 @@ final class ScreenCaptureService {
         logger.notice("Tela congelada: \(frozen.count, privacy: .public) monitor(es).")
 
         let result = await withCheckedContinuation { continuation in
-            editor.present(frozen) { result in
+            editor.present(
+                frozen,
+                mode: pendingMode ?? .area,
+                capturableWindows: capturable
+            ) { result in
                 continuation.resume(returning: result)
             }
         }
 
         switch result {
-        case .copy(let image, _): logger.notice("Captura copiada: \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
-        case .save(let image, _): logger.notice("Captura para salvar: \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
-        case .cancelled: logger.notice("Captura cancelada.")
+        case .copy(let image, let scale):
+            logger.notice("Captura copiada: \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
+            return .copy(image, scale: scale)
+        case .save(let image, let scale):
+            logger.notice("Captura para salvar: \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
+            return .save(image, scale: scale)
+        case .window(let window, let screen):
+            let image = try await WindowCaptureComposer.compose(window, on: screen)
+            logger.notice("Janela capturada (\(window.ownerName, privacy: .public)): \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
+            return .window(image, scale: screen.backingScaleFactor)
+        case .cancelled:
+            logger.notice("Captura cancelada.")
+            return .cancelled
         }
-        return result
     }
 }

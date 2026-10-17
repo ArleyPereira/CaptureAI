@@ -12,6 +12,7 @@ import OSLog
 final class ScreenCaptureCoordinator {
     private let service: ScreenCaptureService
     private let store: ScreenshotStore
+    private let thumbnail = CaptureThumbnailController()
     private let logger = Logger(subsystem: "dev.arley.santana.CaptureAI", category: "screen-capture")
 
     /// Última mensagem para a UI (sucesso ou falha), consumida pela aba.
@@ -33,9 +34,16 @@ final class ScreenCaptureCoordinator {
             case .cancelled:
                 return
             case .copy(let image, let scale):
+                // Na área a decisão já foi tomada na barra; a miniatura seria
+                // uma pergunta a mais sobre algo resolvido.
                 copy(image, scale: scale)
             case .save(let image, _):
                 save(image)
+            case .window(let image, let scale):
+                // No modo janela não há barra: a imagem vai para a área de
+                // transferência e a miniatura oferece salvar ou descartar.
+                copy(image, scale: scale)
+                showThumbnail(image, scale: scale)
             }
         } catch {
             logger.error("Captura falhou: \(error.localizedDescription, privacy: .public)")
@@ -56,15 +64,33 @@ final class ScreenCaptureCoordinator {
         lastMessage = "Captura copiada."
     }
 
-    private func save(_ image: CGImage) {
+    @discardableResult
+    private func save(_ image: CGImage) -> Bool {
         do {
             let url = try write(image, into: store.directoryURL)
             store.reload()
             lastMessage = "Salva em \(url.lastPathComponent)."
+            return true
         } catch {
             logger.error("Falha ao salvar captura: \(error.localizedDescription, privacy: .public)")
             lastMessage = "Não foi possível salvar a captura."
+            return false
         }
+    }
+
+    /// Mostra a miniatura flutuante, de onde dá para copiar, salvar ou descartar.
+    private func showThumbnail(_ image: CGImage, scale: CGFloat) {
+        thumbnail.show(
+            image: image,
+            scale: scale,
+            onCopy: { [weak self] in self?.copy(image, scale: scale) },
+            onSave: { [weak self] in self?.save(image) ?? false }
+        )
+    }
+
+    /// Pede o modo janela ao editor que está abrindo ou aberto.
+    func requestWindowMode() {
+        service.requestWindowMode()
     }
 
     /// Grava o PNG com nome por data, sem sobrescrever nada que já exista.
