@@ -58,6 +58,7 @@ final class TranscriptionHistoryStore {
         self.decoder = decoder
 
         loadFromDisk()
+        removeOrphanRecordings()
     }
 
     private var fileURL: URL {
@@ -69,13 +70,16 @@ final class TranscriptionHistoryStore {
     }
 
     /// Adiciona uma entrada no topo. Ignora texto vazio.
+    ///
+    /// - Returns: `true` se a entrada foi criada.
+    @discardableResult
     func append(
         text: String,
         durationSeconds: TimeInterval? = nil,
         audioFileName: String? = nil
-    ) {
+    ) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return false }
 
         let entry = TranscriptionHistoryEntry(
             text: trimmed,
@@ -85,6 +89,7 @@ final class TranscriptionHistoryStore {
         entries.insert(entry, at: 0)
         persist()
         logger.notice("Histórico: +1 entrada (total \(self.entries.count, privacy: .public)).")
+        return true
     }
 
     /// Remove a entrada e o áudio ligado a ela.
@@ -103,7 +108,32 @@ final class TranscriptionHistoryStore {
         entries.forEach(deleteAudio)
         entries = []
         persist()
+        // "Tudo" inclui o áudio solto que nenhuma entrada referencia — sobra
+        // de versões anteriores, que guardavam o áudio de ditagens sem fala.
+        removeOrphanRecordings()
         logger.notice("Histórico limpo.")
+    }
+
+    /// Apaga os áudios da pasta de gravações que nenhuma entrada referencia.
+    ///
+    /// Roda ao abrir o app também: com o histórico já vazio, o "Excluir tudo"
+    /// fica desativado e nunca alcançaria esses arquivos. Ao abrir não há
+    /// ditagem em andamento, então nenhum áudio pendente é tocado.
+    func removeOrphanRecordings() {
+        let folder = RecordingStorage.directoryURL
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ) else { return }
+
+        let referenced = Set(entries.compactMap(\.audioFileName))
+        var removed = 0
+        for file in files where ["m4a", "wav", "caf"].contains(file.pathExtension.lowercased()) {
+            guard !referenced.contains(file.lastPathComponent) else { continue }
+            if (try? fileManager.removeItem(at: file)) != nil { removed += 1 }
+        }
+        if removed > 0 {
+            logger.notice("Gravações órfãs apagadas: \(removed, privacy: .public).")
+        }
     }
 
     private func deleteAudio(of entry: TranscriptionHistoryEntry) {

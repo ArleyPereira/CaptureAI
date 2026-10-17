@@ -594,7 +594,7 @@ struct SettingsView: View {
                 VStack(spacing: 14) {
                     SettingsRow(
                         title: "Manter após transcrever",
-                        description: "Se desligado, o .m4a é apagado depois de uma transcrição bem-sucedida."
+                        description: "Guarda o áudio junto de cada ditagem do histórico, para ouvir depois. Excluir a ditagem apaga o áudio."
                     ) {
                         Toggle("", isOn: $viewModel.keepRecordingsAfterTranscription)
                             .labelsHidden()

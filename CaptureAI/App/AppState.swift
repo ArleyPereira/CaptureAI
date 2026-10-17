@@ -751,7 +751,7 @@ final class AppState {
         guard !capture.pcmSamples.isEmpty else {
             recordingState = .error
             lastHotkeyResultMessage = VoiceInputError.recordingFailed.localizedDescription
-            discardRecordingIfNeeded(audioURL)
+            discardUnlinkedRecording(audioURL)
             scheduleReturnToIdle(afterMilliseconds: 2_000)
             return
         }
@@ -766,7 +766,7 @@ final class AppState {
             logger.notice("Ditagem sem fala detectada; nada foi inserido.")
             lastInsertionMessage = VoiceInputError.noSpeechDetected.localizedDescription
             recordingState = .idle
-            discardRecordingIfNeeded(audioURL)
+            discardUnlinkedRecording(audioURL)
             scheduleReturnToIdle(afterMilliseconds: 1_400)
             return
         }
@@ -781,7 +781,7 @@ final class AppState {
         if let gateError = dictationReadinessError() {
             recordingState = .error
             permissionDeniedMessage = gateError.localizedDescription
-            discardRecordingIfNeeded(audioURL)
+            discardUnlinkedRecording(audioURL)
             scheduleReturnToIdle(afterMilliseconds: 2_500)
             return
         }
@@ -817,7 +817,7 @@ final class AppState {
             logger.notice("Ditagem sem fala detectada; nada foi inserido.")
             lastInsertionMessage = error.localizedDescription
             recordingState = .idle
-            discardRecordingIfNeeded(audioURL)
+            discardUnlinkedRecording(audioURL)
             scheduleReturnToIdle(afterMilliseconds: 1_400)
             return
         } catch let error as VoiceInputError {
@@ -826,13 +826,13 @@ final class AppState {
             if error == .missingAPIKey || error == .localModelMissing {
                 permissionDeniedMessage = error.localizedDescription
             }
-            discardRecordingIfNeeded(audioURL)
+            discardUnlinkedRecording(audioURL)
             scheduleReturnToIdle(afterMilliseconds: 2_500)
             return
         } catch {
             recordingState = .error
             lastInsertionMessage = VoiceInputError.transcriptionFailed.localizedDescription
-            discardRecordingIfNeeded(audioURL)
+            discardUnlinkedRecording(audioURL)
             scheduleReturnToIdle(afterMilliseconds: 2_500)
             return
         }
@@ -859,12 +859,17 @@ final class AppState {
         //
         // O áudio só é ligado à entrada quando "manter gravações" está ligado —
         // caso contrário o arquivo é apagado logo abaixo e o link nasceria morto.
-        recordTranscriptionHistoryIfNeeded(
+        let linked = recordTranscriptionHistoryIfNeeded(
             transcribed,
             durationSeconds: capture.durationSeconds,
             audioFileName: settings.keepRecordingsAfterTranscription ? audioURL.lastPathComponent : nil
         )
-        discardRecordingIfNeeded(audioURL)
+        // Só fica o áudio que virou parte de uma entrada. Com o histórico
+        // desligado ou no modo teste não há entrada, e o arquivo ficaria
+        // órfão: fora da lista, e fora do alcance do "Excluir tudo".
+        if !linked {
+            discardUnlinkedRecording(audioURL)
+        }
     }
 
     /// `true` quando a transcrição vai ler o `.m4a` em vez do PCM em memória.
@@ -903,8 +908,13 @@ final class AppState {
     ///
     /// Espera o writer fechar o arquivo: apagar no meio da escrita deixaria o
     /// `AVAssetWriter` falhando em background.
-    private func discardRecordingIfNeeded(_ audioURL: URL) {
-        guard !settings.keepRecordingsAfterTranscription else { return }
+    /// Apaga o áudio de uma ditagem que não gerou entrada no histórico.
+    ///
+    /// Vale com "manter gravações" ligado também: essa opção guarda o áudio
+    /// **junto da transcrição**, para ouvir pelo histórico. Uma ditagem sem
+    /// fala, com falha ou fora do histórico não tem entrada — o arquivo
+    /// ficaria solto na pasta, sem nada que o mostre ou o apague.
+    private func discardUnlinkedRecording(_ audioURL: URL) {
         Task { [weak self] in
             guard let self else { return }
             _ = try? await self.audioRecorder.finalizedRecording()
@@ -916,21 +926,25 @@ final class AppState {
     }
 
     /// Salva no histórico local quando a captura está ligada e não é modo teste.
+    ///
+    /// - Returns: `true` quando o áudio ficou ligado a uma entrada nova.
+    @discardableResult
     private func recordTranscriptionHistoryIfNeeded(
         _ text: String,
         durationSeconds: Double,
         audioFileName: String?
-    ) {
-        guard settings.isTranscriptionHistoryEnabled else { return }
-        guard !settings.isTestModeEnabled else { return }
+    ) -> Bool {
+        guard settings.isTranscriptionHistoryEnabled else { return false }
+        guard !settings.isTestModeEnabled else { return false }
         let duration = accumulatedRecordingDuration > 0
             ? accumulatedRecordingDuration
             : durationSeconds
-        historyStore.append(
+        let added = historyStore.append(
             text: text,
             durationSeconds: duration,
             audioFileName: audioFileName
         )
+        return added && audioFileName != nil
     }
 
     private func insertTranscribedText(_ text: String) async {
