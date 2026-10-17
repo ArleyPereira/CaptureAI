@@ -28,7 +28,13 @@ final class CaptureEditorView: NSView {
         case moving(last: CGPoint)
         case resizing(handle: Handle, original: CGRect)
         case annotating
+        /// Arrastando um balão; sem movimento até soltar, o clique abre a edição.
+        case movingBubble(id: UUID, last: CGPoint, moved: Bool)
     }
+
+    /// Campo de digitação posto sobre o balão em edição. O balão é desenhado
+    /// atrás, sem o texto, e a pessoa vê as letras aparecendo dentro dele.
+    private var bubbleTextView: NSTextView?
 
     private var drag: Drag?
     private var draft: Annotation?
@@ -69,6 +75,7 @@ final class CaptureEditorView: NSView {
 
     func clearSelection() {
         guard selection != nil else { return }
+        endBubbleEditing()
         selection = nil
         drag = nil
         draft = nil
@@ -104,10 +111,13 @@ final class CaptureEditorView: NSView {
         context.saveGState()
         context.clip(to: selection)
         for annotation in model.annotations {
-            AnnotationRenderer.draw(annotation, in: context)
+            AnnotationRenderer.draw(
+                annotation, in: context, container: selection,
+                hideText: annotation.id == model.editingBubbleID
+            )
         }
         if let draft {
-            AnnotationRenderer.draw(draft, in: context)
+            AnnotationRenderer.draw(draft, in: context, container: selection)
         }
         context.restoreGState()
 
@@ -251,6 +261,8 @@ final class CaptureEditorView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        // Clicar fora do balão em edição conclui o texto antes de qualquer coisa.
+        endBubbleEditing()
 
         if model.mode == .window {
             updateHoveredWindow(at: point)
@@ -266,6 +278,17 @@ final class CaptureEditorView: NSView {
                 return
             }
             if selection.contains(point) {
+                if model.tool == .bubble {
+                    if let hit = bubble(at: point, in: selection) {
+                        drag = .movingBubble(id: hit, last: point, moved: false)
+                    } else {
+                        let bubble = Annotation(tool: .bubble, color: model.color, start: point, end: point)
+                        model.annotations.append(bubble)
+                        beginBubbleEditing(bubble.id)
+                    }
+                    needsDisplay = true
+                    return
+                }
                 if model.tool == .adjust {
                     drag = .moving(last: point)
                     NSCursor.closedHand.set()
@@ -312,6 +335,17 @@ final class CaptureEditorView: NSView {
             guard let selection else { return }
             draft?.end = clamp(point, to: selection)
 
+        case .movingBubble(let id, let last, _):
+            guard let selection, let index = model.annotations.firstIndex(where: { $0.id == id }) else { return }
+            // A ponta fica dentro da seleção: um balão apontando para fora dela
+            // apontaria para algo que não está na imagem.
+            let target = clamp(point, to: selection)
+            let anchor = model.annotations[index].start
+            let moved = clamp(CGPoint(x: anchor.x + target.x - last.x, y: anchor.y + target.y - last.y), to: selection)
+            model.annotations[index].start = moved
+            model.annotations[index].end = moved
+            drag = .movingBubble(id: id, last: target, moved: true)
+
         case nil:
             return
         }
@@ -337,8 +371,108 @@ final class CaptureEditorView: NSView {
                 model.annotations.append(draft)
             }
             draft = nil
+        case .movingBubble(let id, _, let moved):
+            // Clique sem arrasto num balão é para editar o texto dele.
+            if !moved { beginBubbleEditing(id) }
         default:
             break
+        }
+    }
+
+    // MARK: - Balão de texto
+
+    /// Balão sob o ponto, do mais recente para o mais antigo.
+    private func bubble(at point: CGPoint, in selection: CGRect) -> UUID? {
+        model.annotations.reversed().first { annotation in
+            annotation.tool == .bubble
+                && AnnotationRenderer.bubbleLayout(for: annotation, container: selection).bubble.contains(point)
+        }?.id
+    }
+
+    private func beginBubbleEditing(_ id: UUID) {
+        guard let annotation = model.annotations.first(where: { $0.id == id }) else { return }
+        model.editingBubbleID = id
+
+        let textView = NSTextView(frame: .zero)
+        textView.isRichText = false
+        textView.drawsBackground = false
+        textView.allowsUndo = true
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = false
+        textView.focusRingType = .none
+        textView.delegate = self
+        textView.string = annotation.text
+        addSubview(textView)
+        bubbleTextView = textView
+
+        styleBubbleTextView()
+        layoutBubbleTextView()
+        window?.makeFirstResponder(textView)
+        needsDisplay = true
+    }
+
+    /// Conclui a digitação. Um balão sem texto não tem o que dizer e sai.
+    func endBubbleEditing() {
+        guard let id = model.editingBubbleID else { return }
+        if let textView = bubbleTextView, let index = model.annotations.firstIndex(where: { $0.id == id }) {
+            model.annotations[index].text = textView.string
+            if model.annotations[index].isNegligible {
+                model.annotations.remove(at: index)
+            }
+        }
+        bubbleTextView?.removeFromSuperview()
+        bubbleTextView = nil
+        model.editingBubbleID = nil
+        window?.makeFirstResponder(self)
+        needsDisplay = true
+    }
+
+    /// Fonte e cores do campo acompanham as do balão — inclusive quando a cor
+    /// muda no meio da digitação e o texto passa de branco para escuro.
+    private func styleBubbleTextView() {
+        guard let textView = bubbleTextView,
+              let annotation = model.annotations.first(where: { $0.id == model.editingBubbleID }) else { return }
+        let color = AnnotationRenderer.textColor(on: annotation.color)
+        textView.font = AnnotationRenderer.bubbleFont(scale: 1)
+        textView.textColor = color
+        textView.insertionPointColor = color
+        textView.typingAttributes = [.font: AnnotationRenderer.bubbleFont(scale: 1), .foregroundColor: color]
+    }
+
+    /// Posiciona o campo exatamente sobre a área de texto do balão.
+    ///
+    /// A largura é sempre a máxima do balão: com a largura justa do texto, a
+    /// próxima letra quebraria a linha antes de o balão ter a chance de crescer.
+    private func layoutBubbleTextView() {
+        guard let textView = bubbleTextView, let selection,
+              let annotation = model.annotations.first(where: { $0.id == model.editingBubbleID }) else { return }
+        let layout = AnnotationRenderer.bubbleLayout(for: annotation, container: selection)
+        textView.frame = CGRect(
+            x: layout.textRect.minX,
+            y: layout.textRect.minY,
+            width: layout.maxTextWidth,
+            height: layout.textRect.height
+        )
+    }
+
+    /// Chamado quando a barra muda algo (cor, ferramenta): reaplica o visual
+    /// do campo e devolve o teclado a quem estava digitando.
+    func restoreFocus() {
+        // O desfazer da barra pode ter removido justamente o balão em edição.
+        if let id = model.editingBubbleID, !model.annotations.contains(where: { $0.id == id }) {
+            bubbleTextView?.removeFromSuperview()
+            bubbleTextView = nil
+            model.editingBubbleID = nil
+        }
+        if let textView = bubbleTextView {
+            styleBubbleTextView()
+            layoutBubbleTextView()
+            window?.makeFirstResponder(textView)
+        } else {
+            window?.makeFirstResponder(self)
         }
     }
 
@@ -400,6 +534,7 @@ final class CaptureEditorView: NSView {
 
     /// Chamado quando o modo muda: a seleção de área não vale no modo janela.
     func modeDidChange() {
+        endBubbleEditing()
         selection = nil
         drag = nil
         draft = nil
@@ -518,6 +653,7 @@ final class CaptureEditorView: NSView {
     }
 
     private func handleShortcut(_ event: NSEvent) -> Bool {
+        guard model.editingBubbleID == nil else { return false }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard flags.contains(.command) || flags.contains(.control) else { return false }
         switch event.charactersIgnoringModifiers?.lowercased() {
@@ -569,8 +705,9 @@ final class CaptureEditorView: NSView {
 
         context.draw(cropped, in: CGRect(x: 0, y: 0, width: cropped.width, height: cropped.height))
         context.clip(to: CGRect(x: 0, y: 0, width: cropped.width, height: cropped.height))
+        let imageBounds = CGRect(x: 0, y: 0, width: cropped.width, height: cropped.height)
         for annotation in model.annotations {
-            AnnotationRenderer.draw(annotation, in: context, scale: scale) { point in
+            AnnotationRenderer.draw(annotation, in: context, scale: scale, container: imageBounds) { point in
                 CGPoint(x: (point.x - selection.minX) * scale, y: (point.y - selection.minY) * scale)
             }
         }
@@ -658,4 +795,33 @@ final class CaptureEditorWindow: NSWindow {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+}
+
+extension CaptureEditorView: NSTextViewDelegate {
+    func textDidChange(_ notification: Notification) {
+        guard let textView = bubbleTextView,
+              let index = model.annotations.firstIndex(where: { $0.id == model.editingBubbleID }) else { return }
+        model.annotations[index].text = textView.string
+        layoutBubbleTextView()
+        needsDisplay = true
+    }
+
+    /// Enter conclui; Shift+Enter quebra a linha. Esc também conclui — sair
+    /// da captura inteira por engano no meio de uma frase seria pior.
+    func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.insertNewline(_:)):
+            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                textView.insertNewlineIgnoringFieldEditor(nil)
+            } else {
+                endBubbleEditing()
+            }
+            return true
+        case #selector(NSResponder.cancelOperation(_:)):
+            endBubbleEditing()
+            return true
+        default:
+            return false
+        }
+    }
 }

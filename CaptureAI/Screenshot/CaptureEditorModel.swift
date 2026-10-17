@@ -10,6 +10,7 @@ enum AnnotationTool: String, CaseIterable, Identifiable {
     case ellipse
     case arrow
     case marker
+    case bubble
 
     var id: String { rawValue }
 
@@ -20,6 +21,7 @@ enum AnnotationTool: String, CaseIterable, Identifiable {
         case .ellipse: return "circle"
         case .arrow: return "arrow.up.right"
         case .marker: return "highlighter"
+        case .bubble: return "text.bubble"
         }
     }
 
@@ -30,6 +32,7 @@ enum AnnotationTool: String, CaseIterable, Identifiable {
         case .ellipse: return "Círculo"
         case .arrow: return "Seta"
         case .marker: return "Marca-texto"
+        case .bubble: return "Balão de texto"
         }
     }
 }
@@ -93,9 +96,12 @@ struct CapturableWindow: Equatable {
 struct Annotation: Identifiable {
     let id = UUID()
     let tool: AnnotationTool
-    let color: NSColor
+    var color: NSColor
     var start: CGPoint
     var end: CGPoint
+    /// Conteúdo do balão de texto. No balão, `start` e `end` coincidem: são a
+    /// ponta para onde ele aponta.
+    var text = ""
 
     var rect: CGRect {
         CGRect(
@@ -108,6 +114,7 @@ struct Annotation: Identifiable {
 
     /// Pequena demais para valer — um clique sem arrasto.
     var isNegligible: Bool {
+        if tool == .bubble { return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         if tool == .arrow { return hypot(end.x - start.x, end.y - start.y) < 6 }
         return rect.width < 4 || rect.height < 4
     }
@@ -130,8 +137,14 @@ enum AnnotationRenderer {
         _ annotation: Annotation,
         in context: CGContext,
         scale: CGFloat = 1,
+        container: CGRect = .infinite,
+        hideText: Bool = false,
         map: (CGPoint) -> CGPoint = { $0 }
     ) {
+        if annotation.tool == .bubble {
+            drawBubble(annotation, in: context, scale: scale, container: container, hideText: hideText, map: map)
+            return
+        }
         let start = map(annotation.start)
         let end = map(annotation.end)
         let rect = CGRect(
@@ -147,7 +160,7 @@ enum AnnotationRenderer {
         context.setLineJoin(.round)
 
         switch annotation.tool {
-        case .adjust:
+        case .adjust, .bubble:
             return
 
         case .rectangle:
@@ -202,7 +215,128 @@ enum AnnotationRenderer {
             context.fillPath()
         }
     }
+    // MARK: - Balão de texto
+
+    /// Geometria de um balão, no espaço do contexto onde ele vai ser desenhado.
+    struct BubbleLayout {
+        let bubble: CGRect
+        let textRect: CGRect
+        /// A ponta do rabicho — o ponto para onde o balão aponta.
+        let anchor: CGPoint
+        /// O balão ficou abaixo do ponto, com o rabicho saindo de cima.
+        let pointsUp: Bool
+        let attributed: NSAttributedString
+        let font: NSFont
+        let textColor: NSColor
+        /// Largura máxima do texto antes de quebrar linha.
+        let maxTextWidth: CGFloat
+    }
+
+    static let bubbleFillOpacity: CGFloat = 0.82
+
+    /// Texto escuro sobre cores claras, branco sobre as demais.
+    static func textColor(on fill: NSColor) -> NSColor {
+        let rgb = fill.usingColorSpace(.sRGB) ?? fill
+        let luminance = 0.299 * rgb.redComponent + 0.587 * rgb.greenComponent + 0.114 * rgb.blueComponent
+        return luminance > 0.62 ? NSColor.black.withAlphaComponent(0.85) : .white
+    }
+
+    static func bubbleFont(scale: CGFloat) -> NSFont {
+        .systemFont(ofSize: 14 * scale, weight: .medium)
+    }
+
+    /// Acima e à direita da ponta; abaixo ou para a esquerda quando não cabe.
+    static func bubbleLayout(
+        for annotation: Annotation,
+        scale: CGFloat = 1,
+        container: CGRect,
+        map: (CGPoint) -> CGPoint = { $0 }
+    ) -> BubbleLayout {
+        let anchor = map(annotation.start)
+        let font = bubbleFont(scale: scale)
+        let textColor = textColor(on: annotation.color)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor]
+        // Vazio, o balão ainda precisa de uma linha de altura para receber o cursor.
+        let measured = annotation.text.isEmpty ? " " : annotation.text
+        let attributed = NSAttributedString(string: annotation.text, attributes: attributes)
+
+        let maxTextWidth = 260 * scale
+        let bounding = (measured as NSString).boundingRect(
+            with: CGSize(width: maxTextWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attributes
+        )
+        let textSize = CGSize(width: ceil(max(bounding.width, 10 * scale)), height: ceil(bounding.height))
+        let padX = 12 * scale, padY = 8 * scale, tail = 11 * scale, inset = 14 * scale
+        let size = CGSize(width: textSize.width + padX * 2, height: textSize.height + padY * 2)
+
+        var origin = CGPoint(x: anchor.x - inset, y: anchor.y + tail)
+        var pointsUp = false
+        if origin.y + size.height > container.maxY {
+            origin.y = anchor.y - tail - size.height
+            pointsUp = true
+        }
+        if origin.x + size.width > container.maxX {
+            origin.x = anchor.x + inset - size.width
+        }
+        origin.x = max(origin.x, container.minX)
+
+        let bubble = CGRect(origin: origin, size: size)
+        let textRect = CGRect(x: bubble.minX + padX, y: bubble.minY + padY, width: textSize.width, height: textSize.height)
+        return BubbleLayout(
+            bubble: bubble, textRect: textRect, anchor: anchor, pointsUp: pointsUp,
+            attributed: attributed, font: font, textColor: textColor, maxTextWidth: maxTextWidth
+        )
+    }
+
+    private static func drawBubble(
+        _ annotation: Annotation,
+        in context: CGContext,
+        scale: CGFloat,
+        container: CGRect,
+        hideText: Bool,
+        map: (CGPoint) -> CGPoint
+    ) {
+        let layout = bubbleLayout(for: annotation, scale: scale, container: container, map: map)
+        let bubble = layout.bubble
+        let radius = min(12 * scale, bubble.height / 2)
+
+        // Corpo e rabicho num caminho só: preenchidos juntos, a opacidade não
+        // dobra onde os dois se encontram.
+        let path = CGMutablePath()
+        path.addRoundedRect(in: bubble, cornerWidth: radius, cornerHeight: radius)
+        let edgeY = layout.pointsUp ? bubble.maxY : bubble.minY
+        let halfBase = 7 * scale
+        let baseX = min(max(layout.anchor.x, bubble.minX + radius + halfBase), bubble.maxX - radius - halfBase)
+        path.move(to: CGPoint(x: baseX - halfBase, y: edgeY))
+        path.addLine(to: layout.anchor)
+        path.addLine(to: CGPoint(x: baseX + halfBase, y: edgeY))
+        path.closeSubpath()
+
+        context.saveGState()
+        context.setShadow(offset: CGSize(width: 0, height: -2 * scale), blur: 8 * scale,
+                          color: NSColor.black.withAlphaComponent(0.25).cgColor)
+        context.addPath(path)
+        context.setFillColor(annotation.color.withAlphaComponent(bubbleFillOpacity).cgColor)
+        context.fillPath()
+        context.restoreGState()
+
+        context.addPath(path)
+        context.setStrokeColor(NSColor.white.withAlphaComponent(0.22).cgColor)
+        context.setLineWidth(1 * scale)
+        context.strokePath()
+
+        guard !hideText, !annotation.text.isEmpty else { return }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        layout.attributed.draw(
+            with: layout.textRect.insetBy(dx: 0, dy: 0),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        NSGraphicsContext.restoreGraphicsState()
+    }
 }
+
 
 /// Estado compartilhado entre o editor (AppKit) e a barra (SwiftUI).
 @Observable
@@ -214,6 +348,8 @@ final class CaptureEditorModel {
     var mode: CaptureMode = .area
     /// Janelas visíveis no instante do atalho, para o modo janela.
     var windows: [CapturableWindow] = []
+    /// Balão com o texto sendo digitado agora, se houver.
+    var editingBubbleID: UUID?
 
     @ObservationIgnored var onCopy: () -> Void = {}
     @ObservationIgnored var onSave: () -> Void = {}
@@ -230,6 +366,12 @@ final class CaptureEditorModel {
 
     func select(_ color: NSColor) {
         self.color = color
+        // Com um balão em edição, a cor vale para ele.
+        if let id = editingBubbleID, let index = annotations.firstIndex(where: { $0.id == id }) {
+            annotations[index].color = color
+            onChange()
+            return
+        }
         // Escolher cor é a intenção de desenhar: sair do modo ajuste poupa um
         // clique a mais na ferramenta.
         if tool == .adjust { tool = .rectangle }

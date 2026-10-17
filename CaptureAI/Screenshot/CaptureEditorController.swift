@@ -102,7 +102,7 @@ final class CaptureEditorController {
             ?? windows.first(where: { $0.isKeyWindow })
             ?? windows.first
         if let active, !NSColorPanel.shared.isKeyWindow {
-            active.makeFirstResponder(active.editor)
+            active.editor.restoreFocus()
         }
     }
 
@@ -151,9 +151,10 @@ final class CaptureEditorController {
     // MARK: - Saída
 
     private func finish(asCopy: Bool) {
-        guard
-            let active = windows.first(where: { $0.editor.selection != nil }),
-            let image = active.editor.renderSelection()
+        guard let active = windows.first(where: { $0.editor.selection != nil }) else { return }
+        // Um balão ainda em digitação entra na imagem com o texto que já tem.
+        active.editor.endBubbleEditing()
+        guard let image = active.editor.renderSelection()
         else { return }
         let scale = active.backingScaleFactor
         complete(with: asCopy ? .copy(image, scale: scale) : .save(image, scale: scale))
