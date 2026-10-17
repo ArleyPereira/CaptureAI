@@ -124,6 +124,7 @@ struct ClipboardEntryCard: View {
 /// Miniatura de uma captura, com as ações no hover.
 struct ScreenshotCard: View {
     let entry: ScreenshotEntry
+    let onOpen: () -> Void
     let onCopy: () -> Void
     let onReveal: () -> Void
     let onDelete: () -> Void
@@ -170,6 +171,11 @@ struct ScreenshotCard: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(SettingsTheme.cardStroke(colorScheme), lineWidth: SettingsTheme.hairline)
             }
+            // Clique em qualquer ponto da miniatura abre a imagem; os botões do
+            // hover, por estarem por cima, continuam com o clique deles.
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .onTapGesture(perform: onOpen)
+            .help("Abrir em tela cheia")
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(Self.dateFormatter.string(from: entry.createdAt))

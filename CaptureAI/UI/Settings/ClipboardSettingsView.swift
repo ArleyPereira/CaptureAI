@@ -322,6 +322,7 @@ struct ClipboardSettingsView: View {
                     ForEach(viewModel.screenshotEntries) { entry in
                         ScreenshotCard(
                             entry: entry,
+                            onOpen: { viewModel.openScreenshot(entry) },
                             onCopy: { viewModel.copyScreenshot(entry) },
                             onReveal: { viewModel.revealScreenshot(entry) },
                             onDelete: { viewModel.deleteScreenshot(entry) }
