@@ -766,12 +766,10 @@ extension SettingsViewModel {
         screenshotStore.openDirectoryInFinder()
     }
 
-    /// Abre no Quick Look em tela cheia, com as demais capturas a uma seta
-    /// de distância, na ordem da lista.
+    /// Abre a captura no app padrão de imagens, como um duplo clique no
+    /// arquivo pelo Finder.
     func openScreenshot(_ entry: ScreenshotEntry) {
-        let urls = screenshotEntries.map(\.url)
-        let index = urls.firstIndex(of: entry.url) ?? 0
-        ScreenshotPreviewController.shared.show(urls, startingAt: index)
+        NSWorkspace.shared.open(entry.url)
     }
 
     func revealScreenshot(_ entry: ScreenshotEntry) {

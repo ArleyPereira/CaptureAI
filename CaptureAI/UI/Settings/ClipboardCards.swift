@@ -175,7 +175,7 @@ struct ScreenshotCard: View {
             // hover, por estarem por cima, continuam com o clique deles.
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .onTapGesture(perform: onOpen)
-            .help("Abrir em tela cheia")
+            .help("Abrir")
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(Self.dateFormatter.string(from: entry.createdAt))
