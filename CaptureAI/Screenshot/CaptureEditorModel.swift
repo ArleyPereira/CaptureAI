@@ -219,33 +219,28 @@ enum AnnotationRenderer {
 
     /// Geometria de um balão, no espaço do contexto onde ele vai ser desenhado.
     struct BubbleLayout {
+        /// Contorno único — corpo e rabicho na mesma linha, sem emenda.
+        let path: CGPath
         let bubble: CGRect
         let textRect: CGRect
-        /// A ponta do rabicho — o ponto para onde o balão aponta.
-        let anchor: CGPoint
-        /// O balão ficou abaixo do ponto, com o rabicho saindo de cima.
-        let pointsUp: Bool
         let attributed: NSAttributedString
-        let font: NSFont
-        let textColor: NSColor
         /// Largura máxima do texto antes de quebrar linha.
         let maxTextWidth: CGFloat
     }
 
-    static let bubbleFillOpacity: CGFloat = 0.82
-
-    /// Texto escuro sobre cores claras, branco sobre as demais.
-    static func textColor(on fill: NSColor) -> NSColor {
-        let rgb = fill.usingColorSpace(.sRGB) ?? fill
-        let luminance = 0.299 * rgb.redComponent + 0.587 * rgb.greenComponent + 0.114 * rgb.blueComponent
-        return luminance > 0.62 ? NSColor.black.withAlphaComponent(0.85) : .white
-    }
+    /// Grafite: o mesmo em qualquer fundo, e sem disputar atenção com o
+    /// conteúdo capturado. Não segue a cor da barra de propósito — uma cor viva
+    /// num balão cheio de texto fica pesada.
+    static let bubbleTextColor = NSColor.white
+    private static let bubbleTop = NSColor(red: 0.21, green: 0.22, blue: 0.25, alpha: 0.95)
+    private static let bubbleBottom = NSColor(red: 0.12, green: 0.13, blue: 0.15, alpha: 0.95)
 
     static func bubbleFont(scale: CGFloat) -> NSFont {
         .systemFont(ofSize: 14 * scale, weight: .medium)
     }
 
-    /// Acima e à direita da ponta; abaixo ou para a esquerda quando não cabe.
+    /// Acima e à direita da ponta; espelhado para baixo ou para a esquerda
+    /// quando não cabe no recipiente.
     static func bubbleLayout(
         for annotation: Annotation,
         scale: CGFloat = 1,
@@ -254,8 +249,7 @@ enum AnnotationRenderer {
     ) -> BubbleLayout {
         let anchor = map(annotation.start)
         let font = bubbleFont(scale: scale)
-        let textColor = textColor(on: annotation.color)
-        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor]
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: bubbleTextColor]
         // Vazio, o balão ainda precisa de uma linha de altura para receber o cursor.
         let measured = annotation.text.isEmpty ? " " : annotation.text
         let attributed = NSAttributedString(string: annotation.text, attributes: attributes)
@@ -267,26 +261,59 @@ enum AnnotationRenderer {
             attributes: attributes
         )
         let textSize = CGSize(width: ceil(max(bounding.width, 10 * scale)), height: ceil(bounding.height))
-        let padX = 12 * scale, padY = 8 * scale, tail = 11 * scale, inset = 14 * scale
+        let padX = 14 * scale, padY = 10 * scale
         let size = CGSize(width: textSize.width + padX * 2, height: textSize.height + padY * 2)
 
-        var origin = CGPoint(x: anchor.x - inset, y: anchor.y + tail)
-        var pointsUp = false
-        if origin.y + size.height > container.maxY {
-            origin.y = anchor.y - tail - size.height
-            pointsUp = true
+        // Primeiro na orientação padrão; espelha o eixo que estourar.
+        var (path, bubble) = bubbleShape(size: size, scale: scale, anchor: anchor, flipX: false, flipY: false)
+        let flipY = bubble.maxY > container.maxY
+        let flipX = bubble.maxX > container.maxX
+        if flipX || flipY {
+            (path, bubble) = bubbleShape(size: size, scale: scale, anchor: anchor, flipX: flipX, flipY: flipY)
         }
-        if origin.x + size.width > container.maxX {
-            origin.x = anchor.x + inset - size.width
-        }
-        origin.x = max(origin.x, container.minX)
 
-        let bubble = CGRect(origin: origin, size: size)
         let textRect = CGRect(x: bubble.minX + padX, y: bubble.minY + padY, width: textSize.width, height: textSize.height)
-        return BubbleLayout(
-            bubble: bubble, textRect: textRect, anchor: anchor, pointsUp: pointsUp,
-            attributed: attributed, font: font, textColor: textColor, maxTextWidth: maxTextWidth
+        return BubbleLayout(path: path, bubble: bubble, textRect: textRect, attributed: attributed, maxTextWidth: maxTextWidth)
+    }
+
+    /// Monta o contorno com a ponta na origem e o balão acima e à direita, e
+    /// leva ao lugar certo por espelhamento: as quatro orientações saem de um
+    /// desenho só, todas com a mesma curva.
+    private static func bubbleShape(
+        size: CGSize, scale: CGFloat, anchor: CGPoint, flipX: Bool, flipY: Bool
+    ) -> (CGPath, CGRect) {
+        let r = 13 * scale, tail = 13 * scale, base = 20 * scale
+        let body = CGRect(x: -r + 3 * scale, y: tail, width: size.width, height: size.height)
+        let baseStart = body.minX + r - 1 * scale
+        let baseEnd = baseStart + base
+
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: body.minX + r, y: body.maxY))
+        path.addLine(to: CGPoint(x: body.maxX - r, y: body.maxY))
+        path.addArc(tangent1End: CGPoint(x: body.maxX, y: body.maxY), tangent2End: CGPoint(x: body.maxX, y: body.maxY - r), radius: r)
+        path.addLine(to: CGPoint(x: body.maxX, y: body.minY + r))
+        path.addArc(tangent1End: CGPoint(x: body.maxX, y: body.minY), tangent2End: CGPoint(x: body.maxX - r, y: body.minY), radius: r)
+        path.addLine(to: CGPoint(x: baseEnd, y: body.minY))
+        // Desce saindo na horizontal — sem quina na junção — até a ponta.
+        path.addCurve(
+            to: .zero,
+            control1: CGPoint(x: baseEnd - base * 0.55, y: body.minY),
+            control2: CGPoint(x: 4 * scale, y: tail * 0.35)
         )
+        // Sobe chegando na lateral já na vertical: tangente contínua, sem vinco.
+        path.addCurve(
+            to: CGPoint(x: body.minX, y: body.minY + r),
+            control1: CGPoint(x: -3 * scale, y: tail * 0.55),
+            control2: CGPoint(x: body.minX, y: body.minY + 1 * scale)
+        )
+        path.addLine(to: CGPoint(x: body.minX, y: body.maxY - r))
+        path.addArc(tangent1End: CGPoint(x: body.minX, y: body.maxY), tangent2End: CGPoint(x: body.minX + r, y: body.maxY), radius: r)
+        path.closeSubpath()
+
+        var transform = CGAffineTransform(translationX: anchor.x, y: anchor.y)
+            .scaledBy(x: flipX ? -1 : 1, y: flipY ? -1 : 1)
+        let placed = path.copy(using: &transform) ?? path
+        return (placed, body.applying(transform))
     }
 
     private static func drawBubble(
@@ -298,41 +325,45 @@ enum AnnotationRenderer {
         map: (CGPoint) -> CGPoint
     ) {
         let layout = bubbleLayout(for: annotation, scale: scale, container: container, map: map)
-        let bubble = layout.bubble
-        let radius = min(12 * scale, bubble.height / 2)
-
-        // Corpo e rabicho num caminho só: preenchidos juntos, a opacidade não
-        // dobra onde os dois se encontram.
-        let path = CGMutablePath()
-        path.addRoundedRect(in: bubble, cornerWidth: radius, cornerHeight: radius)
-        let edgeY = layout.pointsUp ? bubble.maxY : bubble.minY
-        let halfBase = 7 * scale
-        let baseX = min(max(layout.anchor.x, bubble.minX + radius + halfBase), bubble.maxX - radius - halfBase)
-        path.move(to: CGPoint(x: baseX - halfBase, y: edgeY))
-        path.addLine(to: layout.anchor)
-        path.addLine(to: CGPoint(x: baseX + halfBase, y: edgeY))
-        path.closeSubpath()
 
         context.saveGState()
-        context.setShadow(offset: CGSize(width: 0, height: -2 * scale), blur: 8 * scale,
-                          color: NSColor.black.withAlphaComponent(0.25).cgColor)
-        context.addPath(path)
-        context.setFillColor(annotation.color.withAlphaComponent(bubbleFillOpacity).cgColor)
+        context.setShadow(
+            offset: CGSize(width: 0, height: -5 * scale),
+            blur: 18 * scale,
+            color: NSColor.black.withAlphaComponent(0.35).cgColor
+        )
+        context.addPath(layout.path)
+        context.setFillColor(bubbleBottom.cgColor)
         context.fillPath()
         context.restoreGState()
 
-        context.addPath(path)
-        context.setStrokeColor(NSColor.white.withAlphaComponent(0.22).cgColor)
+        // Degradê suave de cima para baixo, recortado pelo contorno.
+        context.saveGState()
+        context.addPath(layout.path)
+        context.clip()
+        if let gradient = CGGradient(
+            colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
+            colors: [bubbleTop.cgColor, bubbleBottom.cgColor] as CFArray,
+            locations: [0, 1]
+        ) {
+            context.drawLinearGradient(
+                gradient,
+                start: CGPoint(x: 0, y: layout.bubble.maxY),
+                end: CGPoint(x: 0, y: layout.bubble.minY),
+                options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+            )
+        }
+        context.restoreGState()
+
+        context.addPath(layout.path)
+        context.setStrokeColor(NSColor.white.withAlphaComponent(0.14).cgColor)
         context.setLineWidth(1 * scale)
         context.strokePath()
 
         guard !hideText, !annotation.text.isEmpty else { return }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
-        layout.attributed.draw(
-            with: layout.textRect.insetBy(dx: 0, dy: 0),
-            options: [.usesLineFragmentOrigin, .usesFontLeading]
-        )
+        layout.attributed.draw(with: layout.textRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
         NSGraphicsContext.restoreGraphicsState()
     }
 }

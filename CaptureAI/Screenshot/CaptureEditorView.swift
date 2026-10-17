@@ -430,16 +430,16 @@ final class CaptureEditorView: NSView {
         needsDisplay = true
     }
 
-    /// Fonte e cores do campo acompanham as do balão — inclusive quando a cor
-    /// muda no meio da digitação e o texto passa de branco para escuro.
+    /// Fonte e cor do campo iguais às do balão, para o texto digitado ser o
+    /// mesmo que vai aparecer na imagem.
     private func styleBubbleTextView() {
-        guard let textView = bubbleTextView,
-              let annotation = model.annotations.first(where: { $0.id == model.editingBubbleID }) else { return }
-        let color = AnnotationRenderer.textColor(on: annotation.color)
-        textView.font = AnnotationRenderer.bubbleFont(scale: 1)
+        guard let textView = bubbleTextView else { return }
+        let font = AnnotationRenderer.bubbleFont(scale: 1)
+        let color = AnnotationRenderer.bubbleTextColor
+        textView.font = font
         textView.textColor = color
         textView.insertionPointColor = color
-        textView.typingAttributes = [.font: AnnotationRenderer.bubbleFont(scale: 1), .foregroundColor: color]
+        textView.typingAttributes = [.font: font, .foregroundColor: color]
     }
 
     /// Posiciona o campo exatamente sobre a área de texto do balão.
