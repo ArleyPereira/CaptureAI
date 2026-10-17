@@ -148,12 +148,12 @@ private struct CaptureThumbnailView: View {
                     .transition(.opacity)
 
                 VStack(spacing: 7) {
-                    pill(title: "Copiar", confirmed: copied) {
+                    pill(title: "Copy", confirmed: copied) {
                         guard !copied, !saved else { return }
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { copied = true }
                         onCopy()
                     }
-                    pill(title: "Salvar", confirmed: saved) {
+                    pill(title: "Save", confirmed: saved) {
                         guard !copied, !saved else { return }
                         if onSave() {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { saved = true }
