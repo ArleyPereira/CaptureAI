@@ -325,11 +325,11 @@ struct ClipboardSettingsView: View {
                 }
             }
         }
-        .alert("Excluir todas as capturas?", isPresented: $showDeleteAllImagesConfirmation) {
+        .alert(deleteAllImagesTitle, isPresented: $showDeleteAllImagesConfirmation) {
             Button("Cancelar", role: .cancel) {}
             Button("Excluir", role: .destructive) { viewModel.deleteAllScreenshots() }
         } message: {
-            Text("Os arquivos são apagados da pasta de capturas. Esta ação não pode ser desfeita.")
+            Text(deleteAllImagesMessage)
         }
     }
 
@@ -362,6 +362,19 @@ struct ClipboardSettingsView: View {
 
     private func refreshPermission() {
         hasScreenPermission = ScreenRecordingPermission.isGranted
+    }
+
+    /// O número vai no título: é a informação que decide se a pessoa
+    /// confirma, e numa exclusão em massa ela precisa vê-lo antes do botão.
+    private var deleteAllImagesTitle: String {
+        let total = viewModel.screenshotEntries.count
+        return total == 1 ? "Excluir 1 arquivo?" : "Excluir \(total) arquivos?"
+    }
+
+    private var deleteAllImagesMessage: String {
+        let total = viewModel.screenshotEntries.count
+        let subject = total == 1 ? "O arquivo será apagado" : "Os \(total) arquivos serão apagados"
+        return "\(subject) da pasta de capturas. Esta ação não pode ser desfeita."
     }
 
     private var imageCountLabel: String {

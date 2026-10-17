@@ -41,9 +41,10 @@ final class ScreenCaptureCoordinator {
                 save(image)
             case .window(let image, let scale):
                 // No modo janela não há barra: a imagem vai para a área de
-                // transferência e a miniatura oferece salvar ou descartar.
-                let recorded = copy(image, scale: scale)
-                showThumbnail(image, scale: scale, recorded: recorded)
+                // transferência (e para a pasta), e a miniatura fica para
+                // copiar de novo ou descartar.
+                copy(image, scale: scale)
+                showThumbnail(image, scale: scale)
             }
         } catch {
             logger.error("Captura falhou: \(error.localizedDescription, privacy: .public)")
@@ -51,30 +52,25 @@ final class ScreenCaptureCoordinator {
         }
     }
 
-    /// Vai para a área de transferência com o tamanho em pontos, e entra no
-    /// histórico de imagens.
+    /// Vai para a área de transferência com o tamanho em pontos — e para a
+    /// pasta de capturas, como toda captura.
     ///
-    /// Sem o tamanho, a imagem colada num documento sairia com o dobro do
-    /// tamanho em telas Retina. Sem o registro, a captura sumiria da aba
-    /// Imagens assim que outra coisa fosse copiada.
-    @discardableResult
-    private func copy(_ image: CGImage, scale: CGFloat, record: Bool = true) -> URL? {
+    /// Copiar e salvar não são destinos excludentes: copiar é salvar e, além
+    /// disso, deixar a imagem pronta para colar. Sem o tamanho em pontos, a
+    /// imagem colada sairia com o dobro do tamanho em telas Retina.
+    private func copy(_ image: CGImage, scale: CGFloat, save shouldSave: Bool = true) {
         let size = NSSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.writeObjects([NSImage(cgImage: image, size: size)])
-
-        guard record, let data = Self.png(image) else { return nil }
-        return store.recordCopied(png: data)
+        if shouldSave { save(image) }
     }
 
-    /// Grava na pasta do usuário. Se a captura já estava no histórico de
-    /// cópias, o arquivo é movido para lá em vez de duplicado.
     @discardableResult
-    private func save(_ image: CGImage, replacingCopied copied: URL? = nil) -> Bool {
+    private func save(_ image: CGImage) -> Bool {
         guard let data = Self.png(image) else { return false }
         do {
-            try store.save(png: data, replacingCopied: copied)
+            try store.save(png: data)
             return true
         } catch {
             logger.error("Falha ao salvar captura: \(error.localizedDescription, privacy: .public)")
@@ -83,15 +79,18 @@ final class ScreenCaptureCoordinator {
         }
     }
 
-    /// Mostra a miniatura flutuante, de onde dá para copiar, salvar ou descartar.
-    private func showThumbnail(_ image: CGImage, scale: CGFloat, recorded: URL?) {
+    /// Mostra a miniatura flutuante.
+    ///
+    /// A captura já está na pasta e na área de transferência quando ela
+    /// aparece. Copy volta a pôr a imagem na área de transferência — útil se
+    /// outra coisa foi copiada nesse meio-tempo — sem gravar um segundo
+    /// arquivo; Save confirma o que já está gravado.
+    private func showThumbnail(_ image: CGImage, scale: CGFloat) {
         thumbnail.show(
             image: image,
             scale: scale,
-            // A captura já foi registrada ao entrar na área de transferência;
-            // copiar de novo daqui não cria um segundo item.
-            onCopy: { [weak self] in self?.copy(image, scale: scale, record: false) },
-            onSave: { [weak self] in self?.save(image, replacingCopied: recorded) ?? false }
+            onCopy: { [weak self] in self?.copy(image, scale: scale, save: false) },
+            onSave: { true }
         )
     }
 

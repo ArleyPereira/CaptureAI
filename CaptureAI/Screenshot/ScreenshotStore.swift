@@ -6,9 +6,9 @@ import OSLog
 
 /// Uma captura de tela em disco.
 ///
-/// Diferente do histórico de texto, aqui o disco é a fonte da verdade, e a
-/// lista junta duas pastas: a que o usuário escolheu, com o que ele salvou, e
-/// uma interna do app, com o que ele só copiou. Não há JSON de índice — um
+/// Diferente do histórico de texto, aqui o disco é a fonte da verdade: toda
+/// captura — copiada ou salva — vira um arquivo na pasta que o usuário
+/// escolheu, e a lista é montada lendo essa pasta. Não há JSON de índice: um
 /// arquivo apagado no Finder simplesmente deixa de aparecer.
 struct ScreenshotEntry: Identifiable, Equatable, Sendable {
     let id: URL
@@ -16,8 +16,6 @@ struct ScreenshotEntry: Identifiable, Equatable, Sendable {
     let createdAt: Date
     let byteCount: Int
     let pixelSize: CGSize?
-    /// Está na pasta do usuário (foi salva), e não só no histórico de cópias.
-    let isSaved: Bool
 
     var fileName: String { url.lastPathComponent }
 
@@ -52,64 +50,13 @@ final class ScreenshotStore {
         return documents.appendingPathComponent("CaptureAI", isDirectory: true)
     }
 
-    /// Capturas que foram só copiadas.
-    ///
-    /// A área de transferência guarda uma imagem por vez e não deixa rastro;
-    /// sem esta pasta, toda captura copiada sumiria da lista assim que outra
-    /// coisa fosse copiada. Fica no Application Support porque é um
-    /// histórico do app, não um arquivo que o usuário pediu para guardar.
-    var historyDirectoryURL: URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.temporaryDirectory
-        let url = base
-            .appendingPathComponent("CaptureAI", isDirectory: true)
-            .appendingPathComponent("Copied Captures", isDirectory: true)
-        try? fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
-
-    /// Teto do histórico de cópias. Capturas de tela pesam ~1 MB cada; as
-    /// salvas não entram na conta, porque essas o usuário quis guardar.
-    static let maximumCopiedCaptures = 100
-
-    /// Registra uma captura copiada e devolve onde ela ficou.
+    /// Grava uma captura na pasta do usuário e devolve onde ela ficou.
     @discardableResult
-    func recordCopied(png data: Data) -> URL? {
-        let url = Self.uniqueURL(in: historyDirectoryURL, fileManager: fileManager)
-        do {
-            try data.write(to: url, options: [.atomic])
-            trimCopiedHistory()
-            reload()
-            return url
-        } catch {
-            logger.error("Falha ao registrar captura copiada: \(error.localizedDescription, privacy: .public)")
-            return nil
-        }
-    }
-
-    /// Grava uma captura na pasta do usuário.
-    ///
-    /// Se ela já estava no histórico de cópias, o arquivo é **movido** em vez
-    /// de gravado de novo: copiar e depois salvar a mesma captura tem que
-    /// deixar um item só na lista, não dois iguais.
-    @discardableResult
-    func save(png data: Data, replacingCopied copied: URL? = nil) throws -> URL {
+    func save(png data: Data) throws -> URL {
         let destination = Self.uniqueURL(in: directoryURL, fileManager: fileManager)
-        if let copied, fileManager.fileExists(atPath: copied.path) {
-            try fileManager.moveItem(at: copied, to: destination)
-        } else {
-            try data.write(to: destination, options: [.atomic])
-        }
+        try data.write(to: destination, options: [.atomic])
         reload()
         return destination
-    }
-
-    private func trimCopiedHistory() {
-        let copied = imageFiles(in: historyDirectoryURL)
-            .sorted { $0.date > $1.date }
-        for old in copied.dropFirst(Self.maximumCopiedCaptures) {
-            try? fileManager.removeItem(at: old.url)
-        }
     }
 
     private static func uniqueURL(in directory: URL, fileManager: FileManager) -> URL {
@@ -132,18 +79,15 @@ final class ScreenshotStore {
         return url
     }
 
-    /// Relê as duas pastas. Barato o bastante para rodar ao abrir a aba.
+    /// Relê a pasta. Barato o bastante para rodar ao abrir a aba.
     func reload() {
-        let saved = imageFiles(in: directoryURL).map { ($0, true) }
-        let copied = imageFiles(in: historyDirectoryURL).map { ($0, false) }
-        entries = (saved + copied)
-            .map { file, isSaved in
+        entries = imageFiles(in: directoryURL)
+            .map { file in
                 ScreenshotEntry(
                     id: file.url,
                     createdAt: file.date,
                     byteCount: file.size,
-                    pixelSize: Self.pixelSize(of: file.url),
-                    isSaved: isSaved
+                    pixelSize: Self.pixelSize(of: file.url)
                 )
             }
             .sorted { $0.createdAt > $1.createdAt }
@@ -192,7 +136,7 @@ final class ScreenshotStore {
         }
     }
 
-    /// Apaga todas as capturas da lista — salvas e copiadas.
+    /// Apaga todas as capturas da lista.
     ///
     /// Só remove os arquivos de imagem que listamos: a pasta de capturas é do
     /// usuário e pode ter outra coisa dentro que não nos cabe apagar.
