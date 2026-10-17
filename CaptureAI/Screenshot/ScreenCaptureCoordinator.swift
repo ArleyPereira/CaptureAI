@@ -42,8 +42,8 @@ final class ScreenCaptureCoordinator {
             case .window(let image, let scale):
                 // No modo janela não há barra: a imagem vai para a área de
                 // transferência e a miniatura oferece salvar ou descartar.
-                copy(image, scale: scale)
-                showThumbnail(image, scale: scale)
+                let recorded = copy(image, scale: scale)
+                showThumbnail(image, scale: scale, recorded: recorded)
             }
         } catch {
             logger.error("Captura falhou: \(error.localizedDescription, privacy: .public)")
@@ -51,25 +51,30 @@ final class ScreenCaptureCoordinator {
         }
     }
 
-    /// Vai para a área de transferência com o tamanho em pontos.
+    /// Vai para a área de transferência com o tamanho em pontos, e entra no
+    /// histórico de imagens.
     ///
     /// Sem o tamanho, a imagem colada num documento sairia com o dobro do
-    /// tamanho em telas Retina, porque o app que recebe leria os pixels como
-    /// pontos.
-    private func copy(_ image: CGImage, scale: CGFloat) {
+    /// tamanho em telas Retina. Sem o registro, a captura sumiria da aba
+    /// Imagens assim que outra coisa fosse copiada.
+    @discardableResult
+    private func copy(_ image: CGImage, scale: CGFloat, record: Bool = true) -> URL? {
         let size = NSSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.writeObjects([NSImage(cgImage: image, size: size)])
-        lastMessage = "Captura copiada."
+
+        guard record, let data = Self.png(image) else { return nil }
+        return store.recordCopied(png: data)
     }
 
+    /// Grava na pasta do usuário. Se a captura já estava no histórico de
+    /// cópias, o arquivo é movido para lá em vez de duplicado.
     @discardableResult
-    private func save(_ image: CGImage) -> Bool {
+    private func save(_ image: CGImage, replacingCopied copied: URL? = nil) -> Bool {
+        guard let data = Self.png(image) else { return false }
         do {
-            let url = try write(image, into: store.directoryURL)
-            store.reload()
-            lastMessage = "Salva em \(url.lastPathComponent)."
+            try store.save(png: data, replacingCopied: copied)
             return true
         } catch {
             logger.error("Falha ao salvar captura: \(error.localizedDescription, privacy: .public)")
@@ -79,13 +84,19 @@ final class ScreenCaptureCoordinator {
     }
 
     /// Mostra a miniatura flutuante, de onde dá para copiar, salvar ou descartar.
-    private func showThumbnail(_ image: CGImage, scale: CGFloat) {
+    private func showThumbnail(_ image: CGImage, scale: CGFloat, recorded: URL?) {
         thumbnail.show(
             image: image,
             scale: scale,
-            onCopy: { [weak self] in self?.copy(image, scale: scale) },
-            onSave: { [weak self] in self?.save(image) ?? false }
+            // A captura já foi registrada ao entrar na área de transferência;
+            // copiar de novo daqui não cria um segundo item.
+            onCopy: { [weak self] in self?.copy(image, scale: scale, record: false) },
+            onSave: { [weak self] in self?.save(image, replacingCopied: recorded) ?? false }
         )
+    }
+
+    private static func png(_ image: CGImage) -> Data? {
+        NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
     }
 
     /// Acorde Print Screen + W: abre direto no modo janela ou, se o editor
@@ -98,28 +109,4 @@ final class ScreenCaptureCoordinator {
         }
     }
 
-    /// Grava o PNG com nome por data, sem sobrescrever nada que já exista.
-    private func write(_ image: CGImage, into directory: URL) throws -> URL {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        let stamp = Self.timestamp()
-        var candidate = directory.appendingPathComponent("captureai-\(stamp).png")
-        var suffix = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = directory.appendingPathComponent("captureai-\(stamp)-\(suffix).png")
-            suffix += 1
-        }
-
-        guard let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
-            throw CocoaError(.fileWriteUnknown)
-        }
-        try data.write(to: candidate, options: [.atomic])
-        return candidate
-    }
-
-    private static func timestamp() -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return formatter.string(from: Date())
-    }
 }

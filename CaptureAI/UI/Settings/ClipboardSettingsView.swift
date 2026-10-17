@@ -237,7 +237,7 @@ struct ClipboardSettingsView: View {
                 VStack(spacing: 12) {
                     SettingsRow(
                         title: "Atalho",
-                        description: "Abre a seleção do macOS. Segure Ctrl ao soltar para copiar direto."
+                        description: "Solte para selecionar uma área. Segure e aperte W para capturar uma janela."
                     ) {
                         HStack(spacing: 4) {
                             ForEach(Array(viewModel.captureHotkey.keyParts.enumerated()), id: \.offset) { _, part in
@@ -269,24 +269,6 @@ struct ClipboardSettingsView: View {
             }
 
             HStack(spacing: 8) {
-                Button {
-                    viewModel.beginScreenCapture()
-                } label: {
-                    Label("Capturar agora", systemImage: "viewfinder")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(SettingsTheme.accent)
-
-                Button {
-                    viewModel.reloadScreenshots()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .buttonStyle(GhostButtonStyle())
-                .help("Reler a pasta")
-
                 Spacer(minLength: 8)
 
                 Text(imageCountLabel)
@@ -325,7 +307,7 @@ struct ClipboardSettingsView: View {
             if viewModel.screenshotEntries.isEmpty {
                 emptyState(
                     title: "Nenhuma captura ainda",
-                    message: "Use \(viewModel.captureHotkey.displayName) ou o botão acima para capturar uma área da tela."
+                    message: "Use \(viewModel.captureHotkey.displayName) para capturar. Tudo o que você copiar ou salvar aparece aqui."
                 )
             } else {
                 LazyVGrid(

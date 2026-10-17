@@ -4,18 +4,20 @@ import Foundation
 import Observation
 import OSLog
 
-/// Uma captura de tela salva em disco.
+/// Uma captura de tela em disco.
 ///
-/// Diferente do histórico de texto, aqui o disco é a fonte da verdade: as
-/// imagens vivem numa pasta que o usuário escolhe, abre no Finder e pode
-/// mexer por fora. Por isso não há JSON de índice — a lista é montada lendo a
-/// pasta, e um arquivo apagado no Finder simplesmente deixa de aparecer.
+/// Diferente do histórico de texto, aqui o disco é a fonte da verdade, e a
+/// lista junta duas pastas: a que o usuário escolheu, com o que ele salvou, e
+/// uma interna do app, com o que ele só copiou. Não há JSON de índice — um
+/// arquivo apagado no Finder simplesmente deixa de aparecer.
 struct ScreenshotEntry: Identifiable, Equatable, Sendable {
     let id: URL
     var url: URL { id }
     let createdAt: Date
     let byteCount: Int
     let pixelSize: CGSize?
+    /// Está na pasta do usuário (foi salva), e não só no histórico de cópias.
+    let isSaved: Bool
 
     var fileName: String { url.lastPathComponent }
 
@@ -50,6 +52,79 @@ final class ScreenshotStore {
         return documents.appendingPathComponent("CaptureAI", isDirectory: true)
     }
 
+    /// Capturas que foram só copiadas.
+    ///
+    /// A área de transferência guarda uma imagem por vez e não deixa rastro;
+    /// sem esta pasta, toda captura copiada sumiria da lista assim que outra
+    /// coisa fosse copiada. Fica no Application Support porque é um
+    /// histórico do app, não um arquivo que o usuário pediu para guardar.
+    var historyDirectoryURL: URL {
+        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        let url = base
+            .appendingPathComponent("CaptureAI", isDirectory: true)
+            .appendingPathComponent("Copied Captures", isDirectory: true)
+        try? fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    /// Teto do histórico de cópias. Capturas de tela pesam ~1 MB cada; as
+    /// salvas não entram na conta, porque essas o usuário quis guardar.
+    static let maximumCopiedCaptures = 100
+
+    /// Registra uma captura copiada e devolve onde ela ficou.
+    @discardableResult
+    func recordCopied(png data: Data) -> URL? {
+        let url = Self.uniqueURL(in: historyDirectoryURL, fileManager: fileManager)
+        do {
+            try data.write(to: url, options: [.atomic])
+            trimCopiedHistory()
+            reload()
+            return url
+        } catch {
+            logger.error("Falha ao registrar captura copiada: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// Grava uma captura na pasta do usuário.
+    ///
+    /// Se ela já estava no histórico de cópias, o arquivo é **movido** em vez
+    /// de gravado de novo: copiar e depois salvar a mesma captura tem que
+    /// deixar um item só na lista, não dois iguais.
+    @discardableResult
+    func save(png data: Data, replacingCopied copied: URL? = nil) throws -> URL {
+        let destination = Self.uniqueURL(in: directoryURL, fileManager: fileManager)
+        if let copied, fileManager.fileExists(atPath: copied.path) {
+            try fileManager.moveItem(at: copied, to: destination)
+        } else {
+            try data.write(to: destination, options: [.atomic])
+        }
+        reload()
+        return destination
+    }
+
+    private func trimCopiedHistory() {
+        let copied = imageFiles(in: historyDirectoryURL)
+            .sorted { $0.date > $1.date }
+        for old in copied.dropFirst(Self.maximumCopiedCaptures) {
+            try? fileManager.removeItem(at: old.url)
+        }
+    }
+
+    private static func uniqueURL(in directory: URL, fileManager: FileManager) -> URL {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let stamp = formatter.string(from: Date())
+        var candidate = directory.appendingPathComponent("captureai-\(stamp).png")
+        var suffix = 2
+        while fileManager.fileExists(atPath: candidate.path) {
+            candidate = directory.appendingPathComponent("captureai-\(stamp)-\(suffix).png")
+            suffix += 1
+        }
+        return candidate
+    }
+
     /// Onde as capturas são gravadas agora.
     var directoryURL: URL {
         let url = settings?.screenshotDirectoryURL ?? Self.defaultDirectoryURL
@@ -57,33 +132,44 @@ final class ScreenshotStore {
         return url
     }
 
-    /// Relê a pasta. Barato o bastante para rodar ao abrir a aba.
+    /// Relê as duas pastas. Barato o bastante para rodar ao abrir a aba.
     func reload() {
-        let directory = directoryURL
-        let keys: [URLResourceKey] = [.creationDateKey, .fileSizeKey, .isRegularFileKey]
+        let saved = imageFiles(in: directoryURL).map { ($0, true) }
+        let copied = imageFiles(in: historyDirectoryURL).map { ($0, false) }
+        entries = (saved + copied)
+            .map { file, isSaved in
+                ScreenshotEntry(
+                    id: file.url,
+                    createdAt: file.date,
+                    byteCount: file.size,
+                    pixelSize: Self.pixelSize(of: file.url),
+                    isSaved: isSaved
+                )
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
 
+    private struct ImageFile {
+        let url: URL
+        let date: Date
+        let size: Int
+    }
+
+    private func imageFiles(in directory: URL) -> [ImageFile] {
+        let keys: [URLResourceKey] = [.creationDateKey, .fileSizeKey]
         guard let urls = try? fileManager.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles]
-        ) else {
-            entries = []
-            return
-        }
+        ) else { return [] }
 
         let supported: Set<String> = ["png", "jpg", "jpeg", "tiff", "heic", "pdf"]
-        entries = urls
+        return urls
             .filter { supported.contains($0.pathExtension.lowercased()) }
             .map { url in
                 let values = try? url.resourceValues(forKeys: Set(keys))
-                return ScreenshotEntry(
-                    id: url,
-                    createdAt: values?.creationDate ?? .distantPast,
-                    byteCount: values?.fileSize ?? 0,
-                    pixelSize: Self.pixelSize(of: url)
-                )
+                return ImageFile(url: url, date: values?.creationDate ?? .distantPast, size: values?.fileSize ?? 0)
             }
-            .sorted { $0.createdAt > $1.createdAt }
     }
 
     /// Dimensões sem decodificar a imagem inteira — lê só o cabeçalho.
@@ -106,10 +192,10 @@ final class ScreenshotStore {
         }
     }
 
-    /// Esvazia a pasta de capturas.
+    /// Apaga todas as capturas da lista — salvas e copiadas.
     ///
-    /// Só remove os arquivos de imagem que listamos: a pasta é do usuário e
-    /// pode ter outra coisa dentro que não nos cabe apagar.
+    /// Só remove os arquivos de imagem que listamos: a pasta de capturas é do
+    /// usuário e pode ter outra coisa dentro que não nos cabe apagar.
     func deleteAll() {
         let removed = entries.count
         for entry in entries {

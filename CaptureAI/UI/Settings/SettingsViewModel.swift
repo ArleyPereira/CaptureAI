@@ -726,9 +726,6 @@ extension SettingsViewModel {
         screenshotStore.reload()
     }
 
-    func beginScreenCapture() {
-        captureCoordinator.beginCapture()
-    }
 
     /// Abre o seletor de pasta e passa a gravar as próximas capturas nela.
     ///
