@@ -22,8 +22,8 @@
         {
           "fill": "none",
           "glass": false,
-          "image-name": "Waveform.png",
-          "name": "Waveform"
+          "image-name": "CaptureFrame.png",
+          "name": "CaptureFrame"
         }
       ],
       "shadow": {
