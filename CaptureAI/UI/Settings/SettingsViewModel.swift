@@ -66,6 +66,10 @@ final class SettingsViewModel {
     /// Notifica o AppDelegate para re-registrar o atalho de captura.
     var onCaptureHotkeyChanged: () -> Void
 
+    /// Aviso de "desfazer" da última exclusão individual, se ainda valer.
+    var undoToast: UndoToast?
+    @ObservationIgnored fileprivate var undoDismissTask: Task<Void, Never>?
+
     /// Notifica a janela para aplicar Sistema / Claro / Escuro.
     var onAppearanceThemeChanged: () -> Void
 
@@ -700,7 +704,10 @@ extension SettingsViewModel {
     }
 
     func deleteClipboardEntry(_ id: UUID) {
-        clipboardStore.delete(id: id)
+        guard let removed = clipboardStore.delete(id: id) else { return }
+        offerUndo(removed.kind == .link ? "Link excluído" : "Texto excluído") { [weak self] in
+            self?.clipboardStore.restore(removed)
+        }
     }
 
     func clearClipboardHistory() {
@@ -764,10 +771,61 @@ extension SettingsViewModel {
     }
 
     func deleteScreenshot(_ entry: ScreenshotEntry) {
-        screenshotStore.delete(entry)
+        guard let trashed = screenshotStore.delete(entry) else { return }
+        let original = entry.url
+        offerUndo("Captura excluída") { [weak self] in
+            self?.screenshotStore.restore(trashed: trashed, to: original)
+        }
+    }
+
+    // MARK: Desfazer
+
+    /// Quanto o aviso fica na tela. Um pouco mais que os 3 s pedidos: é tempo
+    /// de perceber o engano, levar o mouse até o botão e clicar.
+    static let undoDuration: Duration = .seconds(4)
+
+    /// Mostra o aviso com "Desfazer". Uma exclusão nova substitui a anterior,
+    /// que passa a valer de vez.
+    private func offerUndo(_ message: String, undo: @escaping () -> Void) {
+        undoToast = UndoToast(message: message, undo: undo)
+        scheduleUndoDismiss()
+    }
+
+    func performUndo() {
+        guard let toast = undoToast else { return }
+        undoDismissTask?.cancel()
+        undoToast = nil
+        toast.undo()
+    }
+
+    /// Pausa a contagem enquanto o mouse está sobre o aviso: quem está indo
+    /// clicar não pode perder o botão no meio do caminho.
+    func setUndoToastHovered(_ hovering: Bool) {
+        if hovering {
+            undoDismissTask?.cancel()
+        } else {
+            scheduleUndoDismiss()
+        }
+    }
+
+    private func scheduleUndoDismiss() {
+        undoDismissTask?.cancel()
+        guard let id = undoToast?.id else { return }
+        undoDismissTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.undoDuration)
+            guard !Task.isCancelled, let self, self.undoToast?.id == id else { return }
+            self.undoToast = nil
+        }
     }
 
     func deleteAllScreenshots() {
         screenshotStore.deleteAll()
     }
+}
+
+/// Uma exclusão que ainda pode ser desfeita.
+struct UndoToast: Identifiable {
+    let id = UUID()
+    let message: String
+    let undo: () -> Void
 }

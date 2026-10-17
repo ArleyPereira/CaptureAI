@@ -106,9 +106,20 @@ final class ClipboardHistoryStore {
         persist()
     }
 
-    func delete(id: UUID) {
-        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
-        entries.remove(at: index)
+    /// Remove o item e o devolve, para quem quiser oferecer "desfazer".
+    @discardableResult
+    func delete(id: UUID) -> ClipboardEntry? {
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return nil }
+        let removed = entries.remove(at: index)
+        persist()
+        return removed
+    }
+
+    /// Devolve um item excluído à lista, na posição que a data dele indica.
+    func restore(_ entry: ClipboardEntry) {
+        guard !entries.contains(where: { $0.id == entry.id }) else { return }
+        entries.append(entry)
+        sortAndTrim()
         persist()
     }
 

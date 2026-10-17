@@ -127,12 +127,31 @@ final class ScreenshotStore {
         return CGSize(width: width, height: height)
     }
 
-    func delete(_ entry: ScreenshotEntry) {
+    /// Manda a captura para a Lixeira e devolve onde ela foi parar.
+    ///
+    /// Lixeira em vez de apagar de vez: o "desfazer" só precisa trazer o
+    /// arquivo de volta, e mesmo depois de o aviso sumir a captura continua
+    /// recuperável pelo Finder, como qualquer arquivo excluído no macOS.
+    @discardableResult
+    func delete(_ entry: ScreenshotEntry) -> URL? {
         do {
-            try fileManager.removeItem(at: entry.url)
+            var trashed: NSURL?
+            try fileManager.trashItem(at: entry.url, resultingItemURL: &trashed)
             entries.removeAll { $0.id == entry.id }
+            return trashed as URL?
         } catch {
-            logger.error("Falha ao apagar captura: \(error.localizedDescription, privacy: .public)")
+            logger.error("Falha ao excluir captura: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// Tira da Lixeira uma captura excluída e a põe de volta onde estava.
+    func restore(trashed: URL, to original: URL) {
+        do {
+            try fileManager.moveItem(at: trashed, to: original)
+            reload()
+        } catch {
+            logger.error("Falha ao restaurar captura: \(error.localizedDescription, privacy: .public)")
         }
     }
 

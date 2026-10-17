@@ -64,6 +64,9 @@ struct SettingsView: View {
             sidebar
             divider
             content
+                .overlay(alignment: .bottom) {
+                    UndoToastView(viewModel: viewModel)
+                }
         }
         .background(SettingsBackground())
         .frame(minWidth: 860, minHeight: 620)
