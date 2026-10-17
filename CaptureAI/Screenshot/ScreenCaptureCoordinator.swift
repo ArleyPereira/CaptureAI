@@ -40,10 +40,9 @@ final class ScreenCaptureCoordinator {
             case .save(let image, _):
                 save(image)
             case .window(let image, let scale):
-                // No modo janela não há barra: a imagem vai para a área de
-                // transferência (e para a pasta), e a miniatura fica para
-                // copiar de novo ou descartar.
-                copy(image, scale: scale)
+                // No modo janela não há barra na tela: a decisão fica para a
+                // miniatura. Nada vai para a área de transferência nem para a
+                // pasta até a pessoa escolher Copy ou Save.
                 showThumbnail(image, scale: scale)
             }
         } catch {
@@ -79,18 +78,17 @@ final class ScreenCaptureCoordinator {
         }
     }
 
-    /// Mostra a miniatura flutuante.
+    /// Mostra a miniatura flutuante com as duas saídas da captura de janela.
     ///
-    /// A captura já está na pasta e na área de transferência quando ela
-    /// aparece. Copy volta a pôr a imagem na área de transferência — útil se
-    /// outra coisa foi copiada nesse meio-tempo — sem gravar um segundo
-    /// arquivo; Save confirma o que já está gravado.
+    /// Copy só põe a imagem na área de transferência, sem gravar arquivo —
+    /// é para colar agora. Save grava na pasta, e é isso que a faz entrar no
+    /// histórico de Imagens.
     private func showThumbnail(_ image: CGImage, scale: CGFloat) {
         thumbnail.show(
             image: image,
             scale: scale,
             onCopy: { [weak self] in self?.copy(image, scale: scale, save: false) },
-            onSave: { true }
+            onSave: { [weak self] in self?.save(image) ?? false }
         )
     }
 

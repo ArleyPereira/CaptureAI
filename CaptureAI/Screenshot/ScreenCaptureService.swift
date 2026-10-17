@@ -46,8 +46,8 @@ final class ScreenCaptureService {
     enum Outcome {
         case copy(CGImage, scale: CGFloat)
         case save(CGImage, scale: CGFloat)
-        /// Captura de janela: vai para a área de transferência e ganha a
-        /// miniatura flutuante — é o único modo sem barra de ações na tela.
+        /// Captura de janela: ganha a miniatura flutuante, onde se decide entre
+        /// copiar e salvar — é o único modo sem barra de ações na tela.
         case window(CGImage, scale: CGFloat)
         case cancelled
     }

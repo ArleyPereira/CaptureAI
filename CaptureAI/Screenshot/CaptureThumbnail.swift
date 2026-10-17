@@ -4,8 +4,8 @@ import SwiftUI
 /// Miniatura que fica flutuando no canto inferior esquerdo após uma captura.
 ///
 /// Aparece depois de uma captura de janela, que não tem barra de ações na
-/// tela: a imagem já está na área de transferência, e a miniatura deixa copiar
-/// de novo, salvar ou descartar. Qualquer ação encerra a miniatura — ela é uma
+/// tela: a imagem ainda não foi para lugar nenhum, e a miniatura é onde se
+/// decide — copiar, salvar ou descartar. Qualquer ação encerra a miniatura — ela é uma
 /// pergunta de uma resposta só. É um painel que não ativa o app: clicar nele
 /// não tira o foco de onde a pessoa estava digitando.
 @MainActor
