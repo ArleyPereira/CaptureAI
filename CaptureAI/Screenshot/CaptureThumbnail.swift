@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Miniatura que fica flutuando no canto inferior esquerdo após uma captura.
 ///
@@ -129,14 +130,13 @@ final class CaptureThumbnailController {
 
 /// Hospeda a miniatura e a torna arrastável como um arquivo de imagem.
 ///
-/// Ao começar o arraste, a captura é gravada numa pasta temporária do sistema
-/// — fora da pasta de capturas, então fora do histórico — e esse arquivo vai
-/// para a área de arraste. Quem recebe faz a cópia: o Finder grava onde a
-/// pessoa soltou, e apps como Mail ou Slack anexam.
+/// O arraste leva uma *promessa* de arquivo, não um arquivo pronto: quando a
+/// pessoa solta numa pasta, o Finder informa o destino e a imagem é gravada
+/// direto ali. Não existe cópia temporária — nada sobra para apagar depois —
+/// e nada entra na pasta de capturas, então o histórico não muda.
 ///
 /// O arraste é AppKit, e não o `.onDrag` do SwiftUI, porque só o
-/// `NSDraggingSource` diz se a imagem foi solta em algum lugar — é isso que
-/// fecha a miniatura.
+/// `NSDraggingSource` diz se a imagem foi solta — é isso que fecha a miniatura.
 final class DraggableThumbnailHostingView<Content: View>: NSHostingView<Content> {
     var image: CGImage?
     var preview: NSImage?
@@ -163,17 +163,29 @@ final class DraggableThumbnailHostingView<Content: View>: NSHostingView<Content>
         // Uma folga antes de virar arraste, para um clique trêmulo nos botões
         // não ser tomado por arrastar.
         let distance = hypot(event.locationInWindow.x - start.x, event.locationInWindow.y - start.y)
-        guard distance > 4, let url = writeTemporaryFile() else {
+        guard distance > 4,
+              let image,
+              let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+        else {
             super.mouseDragged(with: event)
             return
         }
         isDragging = true
 
-        let item = NSDraggingItem(pasteboardWriter: url as NSURL)
-        item.setDraggingFrame(bounds.insetBy(dx: 0, dy: 0), contents: preview)
-        dragSource.onEnded = { [weak self] in
+        let writer = CapturePromiseWriter(png: png)
+        let provider = CaptureFilePromiseProvider(fileType: UTType.png.identifier, delegate: writer)
+        provider.png = png
+        // O Finder pode pedir o arquivo depois que o arraste terminou e a
+        // miniatura já fechou; o escritor se mantém vivo até gravar.
+        writer.retainUntilWritten()
+
+        let item = NSDraggingItem(pasteboardWriter: provider)
+        item.setDraggingFrame(bounds, contents: preview)
+        dragSource.onEnded = { [weak self] dropped in
             self?.isDragging = false
             self?.mouseDownPoint = nil
+            // Solto em lugar nenhum, a promessa nunca será cobrada.
+            if !dropped { writer.release() }
         }
         beginDraggingSession(with: [item], event: event, source: dragSource)
     }
@@ -183,40 +195,67 @@ final class DraggableThumbnailHostingView<Content: View>: NSHostingView<Content>
         if !isDragging { super.mouseUp(with: event) }
         isDragging = false
     }
+}
 
-    /// Grava a captura com um nome por data numa subpasta temporária única,
-    /// para dois arrastes seguidos não disputarem o mesmo arquivo.
-    private func writeTemporaryFile() -> URL? {
-        guard let image,
-              let data = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
-        else { return nil }
+/// Promessa de arquivo que também carrega a imagem em si.
+///
+/// O Finder usa a promessa e grava no destino. Apps que não trabalham com
+/// promessas — Mail, Slack, navegadores — recebem o PNG direto da área de
+/// arraste.
+final class CaptureFilePromiseProvider: NSFilePromiseProvider {
+    var png: Data?
 
-        let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CaptureAI-drag-\(UUID().uuidString)", isDirectory: true)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let url = folder.appendingPathComponent("captureai-\(formatter.string(from: Date())).png")
-        do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            try data.write(to: url, options: [.atomic])
-        } catch {
-            return nil
-        }
-        // O destino copia o arquivo no momento da soltura; um tempo depois o
-        // original temporário já não é necessário.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
-            try? FileManager.default.removeItem(at: folder)
-        }
-        return url
+    override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        super.writableTypes(for: pasteboard) + [.png]
     }
 
+    override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        type == .png ? png : super.pasteboardPropertyList(forType: type)
+    }
+}
+
+/// Grava a imagem onde o Finder pedir, uma única vez.
+final class CapturePromiseWriter: NSObject, NSFilePromiseProviderDelegate {
+    private let png: Data
+    private let fileName: String
+    /// Escritores com promessa em aberto. Sem esta referência, o escritor
+    /// sumiria junto com a miniatura antes de o Finder cobrar o arquivo.
+    @MainActor private static var pending: Set<CapturePromiseWriter> = []
+
+    init(png: Data) {
+        self.png = png
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        self.fileName = "captureai-\(formatter.string(from: Date())).png"
+    }
+
+    @MainActor func retainUntilWritten() { Self.pending.insert(self) }
+    @MainActor func release() { Self.pending.remove(self) }
+
+    func filePromiseProvider(_ provider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
+        fileName
+    }
+
+    func filePromiseProvider(
+        _ provider: NSFilePromiseProvider,
+        writePromiseTo url: URL,
+        completionHandler: @escaping (Error?) -> Void
+    ) {
+        do {
+            try png.write(to: url, options: [.atomic])
+            completionHandler(nil)
+        } catch {
+            completionHandler(error)
+        }
+        DispatchQueue.main.async { [self] in release() }
+    }
 }
 
 /// Diz ao sistema que a miniatura só sai como cópia, e avisa quando ela foi
 /// solta em algum lugar.
 final class ThumbnailDragSource: NSObject, NSDraggingSource {
     var onDropped: (() -> Void)?
-    var onEnded: (() -> Void)?
+    var onEnded: ((_ dropped: Bool) -> Void)?
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         // Cópia: soltar numa pasta nunca deve "mover" a captura de lugar algum.
@@ -224,8 +263,9 @@ final class ThumbnailDragSource: NSObject, NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        onEnded?()
-        if operation != [] { onDropped?() }
+        let dropped = operation != []
+        onEnded?(dropped)
+        if dropped { onDropped?() }
     }
 }
 
