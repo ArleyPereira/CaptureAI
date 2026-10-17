@@ -37,6 +37,15 @@ struct ClipboardSnapshot {
 
     /// Restaura o snapshot no clipboard informado.
     func restore(into pasteboard: NSPasteboard = .general) {
+        // Devolver o que já era do usuário não é uma cópia nova. Sem avisar o
+        // monitor, toda ditagem empurraria o conteúdo anterior do clipboard
+        // para o topo do histórico como se tivesse acabado de ser copiado.
+        if let restored = items.first?.string(forType: .string) {
+            MainActor.assumeIsolated {
+                ClipboardMonitor.shared.suppress(restored)
+            }
+        }
+
         pasteboard.clearContents()
         guard !items.isEmpty else { return }
         pasteboard.writeObjects(items)

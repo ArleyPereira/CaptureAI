@@ -53,12 +53,18 @@ final class SettingsViewModel {
     let ctcModelStore: LocalCtcModelStore
     let historyStore: TranscriptionHistoryStore
     let wordReplacementStore: WordReplacementStore
+    let clipboardStore: ClipboardHistoryStore
+    let screenshotStore: ScreenshotStore
+    let captureCoordinator: ScreenCaptureCoordinator
 
     /// Janela AppKit que hospeda as configurações (para centralizar diálogos filhos).
     weak var hostWindow: NSWindow?
 
     /// Notifica o AppState para liberar o modelo local quando a política muda.
     var onTranscriptionPolicyChanged: () -> Void
+
+    /// Notifica o AppDelegate para re-registrar o atalho de captura.
+    var onCaptureHotkeyChanged: () -> Void
 
     /// Notifica a janela para aplicar Sistema / Claro / Escuro.
     var onAppearanceThemeChanged: () -> Void
@@ -193,6 +199,10 @@ final class SettingsViewModel {
         ctcModelStore: LocalCtcModelStore? = nil,
         historyStore: TranscriptionHistoryStore? = nil,
         wordReplacementStore: WordReplacementStore? = nil,
+        clipboardStore: ClipboardHistoryStore? = nil,
+        screenshotStore: ScreenshotStore? = nil,
+        captureCoordinator: ScreenCaptureCoordinator? = nil,
+        onCaptureHotkeyChanged: @escaping () -> Void = {},
         onTranscriptionPolicyChanged: @escaping () -> Void = {},
         onAppearanceThemeChanged: @escaping () -> Void = {},
         onRecordingHUDStyleChanged: @escaping () -> Void = {},
@@ -210,6 +220,12 @@ final class SettingsViewModel {
         self.ctcModelStore = ctcModelStore ?? .shared
         self.historyStore = historyStore ?? .shared
         self.wordReplacementStore = wordReplacementStore ?? .shared
+        self.clipboardStore = clipboardStore ?? .shared
+        let screenshots = screenshotStore ?? ScreenshotStore(settings: settings)
+        self.screenshotStore = screenshots
+        self.captureCoordinator = captureCoordinator
+            ?? ScreenCaptureCoordinator(settings: settings, store: screenshots)
+        self.onCaptureHotkeyChanged = onCaptureHotkeyChanged
         self.onTranscriptionPolicyChanged = onTranscriptionPolicyChanged
         self.onAppearanceThemeChanged = onAppearanceThemeChanged
         self.onRecordingHUDStyleChanged = onRecordingHUDStyleChanged
@@ -634,5 +650,127 @@ final class SettingsViewModel {
             statusMessage = error.localizedDescription
             didSucceedLastAction = false
         }
+    }
+}
+
+// MARK: - Área de transferência e capturas
+
+extension SettingsViewModel {
+    var isClipboardHistoryEnabled: Bool {
+        get { settings.isClipboardHistoryEnabled }
+        set {
+            guard settings.isClipboardHistoryEnabled != newValue else { return }
+            settings.isClipboardHistoryEnabled = newValue
+            if newValue {
+                ClipboardMonitor.shared.start()
+            } else {
+                ClipboardMonitor.shared.stop()
+            }
+        }
+    }
+
+    var clipboardEntries: [ClipboardEntry] { clipboardStore.entries }
+
+    /// Aplica os dois filtros da aba de texto.
+    func filteredClipboardEntries(
+        kind: ClipboardKind?,
+        period: ClipboardPeriod,
+        search: String
+    ) -> [ClipboardEntry] {
+        let term = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return clipboardStore.entries.filter { entry in
+            if let kind, entry.kind != kind { return false }
+            guard period.contains(entry.createdAt) else { return false }
+            guard !term.isEmpty else { return true }
+            return entry.content.lowercased().contains(term)
+        }
+    }
+
+    /// Copia de volta sem gerar um item novo no histórico.
+    func copyClipboardEntry(_ entry: ClipboardEntry) {
+        ClipboardMonitor.shared.copyWithoutRecording(entry.content)
+    }
+
+    func updateClipboardEntry(_ id: UUID, content: String) {
+        clipboardStore.update(id: id, content: content)
+    }
+
+    func toggleClipboardPin(_ id: UUID) {
+        clipboardStore.togglePin(id: id)
+    }
+
+    func deleteClipboardEntry(_ id: UUID) {
+        clipboardStore.delete(id: id)
+    }
+
+    func clearClipboardHistory() {
+        clipboardStore.deleteAll(keepingPinned: true)
+    }
+
+    // MARK: Capturas
+
+    var screenshotEntries: [ScreenshotEntry] { screenshotStore.entries }
+
+    var screenshotDirectoryLabel: String { settings.screenshotDirectoryDisplayPath }
+
+    var captureHotkey: CaptureHotkey {
+        get { settings.captureHotkey }
+        set {
+            guard settings.captureHotkey != newValue else { return }
+            settings.captureHotkey = newValue
+            onCaptureHotkeyChanged()
+        }
+    }
+
+    func reloadScreenshots() {
+        screenshotStore.reload()
+    }
+
+    func beginScreenCapture() {
+        captureCoordinator.beginCapture()
+    }
+
+    /// Abre o seletor de pasta e passa a gravar as próximas capturas nela.
+    ///
+    /// Não move o que já foi salvo: os arquivos antigos continuam onde estão,
+    /// e mexer neles por conta própria seria decidir pelo usuário.
+    func chooseScreenshotDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = screenshotStore.directoryURL
+        panel.prompt = "Usar esta pasta"
+        panel.message = "Escolha onde as próximas capturas serão salvas."
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        settings.setScreenshotDirectory(url)
+        screenshotStore.reload()
+    }
+
+    func resetScreenshotDirectory() {
+        settings.setScreenshotDirectory(nil)
+        screenshotStore.reload()
+    }
+
+    func openScreenshotDirectory() {
+        screenshotStore.openDirectoryInFinder()
+    }
+
+    func revealScreenshot(_ entry: ScreenshotEntry) {
+        screenshotStore.revealInFinder(entry)
+    }
+
+    func copyScreenshot(_ entry: ScreenshotEntry) {
+        screenshotStore.copyToPasteboard(entry)
+    }
+
+    func deleteScreenshot(_ entry: ScreenshotEntry) {
+        screenshotStore.delete(entry)
+    }
+
+    func deleteAllScreenshots() {
+        screenshotStore.deleteAll()
     }
 }

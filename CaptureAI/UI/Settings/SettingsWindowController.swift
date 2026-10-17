@@ -24,7 +24,10 @@ final class SettingsWindowController {
     func show(
         settings: AppSettings,
         historyStore: TranscriptionHistoryStore = .shared,
+        screenshotStore: ScreenshotStore? = nil,
+        captureCoordinator: ScreenCaptureCoordinator? = nil,
         tab: SettingsTab? = nil,
+        onCaptureHotkeyChanged: @escaping () -> Void = {},
         onTranscriptionPolicyChanged: @escaping () -> Void = {},
         onRecordingHUDStyleChanged: @escaping () -> Void = {},
         onDictationHotkeyChanged: @escaping () -> Void = {},
@@ -48,6 +51,7 @@ final class SettingsWindowController {
             viewModel.onAppearanceThemeChanged = applyTheme
             viewModel.onRecordingHUDStyleChanged = onRecordingHUDStyleChanged
             viewModel.onDictationHotkeyChanged = onDictationHotkeyChanged
+            viewModel.onCaptureHotkeyChanged = onCaptureHotkeyChanged
             viewModel.onHotkeyCaptureSessionChanged = onHotkeyCaptureSessionChanged
             viewModel.onFieldDictationRequested = onFieldDictationRequested
             viewModel.onFieldDictationStopRequested = onFieldDictationStopRequested
@@ -59,6 +63,9 @@ final class SettingsWindowController {
             let viewModel = SettingsViewModel(
                 settings: settings,
                 historyStore: historyStore,
+                screenshotStore: screenshotStore,
+                captureCoordinator: captureCoordinator,
+                onCaptureHotkeyChanged: onCaptureHotkeyChanged,
                 onTranscriptionPolicyChanged: onTranscriptionPolicyChanged,
                 onAppearanceThemeChanged: applyTheme,
                 onRecordingHUDStyleChanged: onRecordingHUDStyleChanged,

@@ -46,6 +46,13 @@ final class AppState {
 
     private let audioRecorder: any AudioRecorderProtocol
     private let hotkeyService: any GlobalHotkeyServiceProtocol
+    /// Atalho da captura de tela, separado do de ditado.
+    private let captureHotkeyService = CaptureHotkeyService()
+    /// Observa a área de transferência do sistema.
+    private let clipboardMonitor = ClipboardMonitor.shared
+    /// Captura de tela: seleção, revisão e destino.
+    let captureCoordinator: ScreenCaptureCoordinator
+    let screenshotStore: ScreenshotStore
     private let accessibilityService: any AccessibilityServiceProtocol
     private let textInsertionService: any TextInsertionService
     private let transcriptionService: any TranscriptionService
@@ -103,8 +110,16 @@ final class AppState {
         self.historyStore = historyStore ?? .shared
         self.transcriptionService = transcriptionService
             ?? CompositeTranscriptionService(settings: resolvedSettings)
+        let screenshots = ScreenshotStore(settings: resolvedSettings)
+        self.screenshotStore = screenshots
+        self.captureCoordinator = ScreenCaptureCoordinator(
+            settings: resolvedSettings,
+            store: screenshots
+        )
         refreshAccessibilityStatus()
         startHotkeyMonitoring()
+        startCaptureHotkeyMonitoring()
+        startClipboardMonitoringIfEnabled()
         warmLocalModelsIfNeeded()
 
         playback.onSessionChanged = { [weak self] in
@@ -144,7 +159,12 @@ final class AppState {
         settingsWindowController.show(
             settings: settings,
             historyStore: historyStore,
+            screenshotStore: screenshotStore,
+            captureCoordinator: captureCoordinator,
             tab: tab,
+            onCaptureHotkeyChanged: { [weak self] in
+                self?.reloadCaptureHotkey()
+            },
             onTranscriptionPolicyChanged: { [weak self] in
                 self?.releaseLocalModelResources()
                 self?.warmLocalModelsIfNeeded()
@@ -266,6 +286,32 @@ final class AppState {
     func stopHotkeyMonitoring() {
         hotkeyService.stop()
         isHotkeyMonitoringEnabled = false
+    }
+
+    /// Liga o atalho global da captura de tela.
+    func startCaptureHotkeyMonitoring() {
+        captureHotkeyService.onTriggered = { [weak self] in
+            Task { @MainActor in
+                self?.captureCoordinator.beginCapture()
+            }
+        }
+        let hotkey = settings.captureHotkey
+        captureHotkeyService.start(keyCode: hotkey.keyCode, modifiers: hotkey.modifiers)
+    }
+
+    /// Reaplica o atalho de captura salvo nas configurações.
+    func reloadCaptureHotkey() {
+        let hotkey = settings.captureHotkey
+        captureHotkeyService.rebind(keyCode: hotkey.keyCode, modifiers: hotkey.modifiers)
+    }
+
+    /// Começa a observar a área de transferência, se o usuário quiser.
+    func startClipboardMonitoringIfEnabled() {
+        if settings.isClipboardHistoryEnabled {
+            clipboardMonitor.start()
+        } else {
+            clipboardMonitor.stop()
+        }
     }
 
     /// Reaplica o atalho salvo (após o usuário alterar em Configurações).

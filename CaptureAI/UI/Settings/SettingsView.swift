@@ -7,6 +7,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case appearance
     case models
     case transcription
+    case clipboard
     case history
     case recordings
 
@@ -18,6 +19,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .appearance: return "Aparência"
         case .models: return "Modelos"
         case .transcription: return "Transcrição"
+        case .clipboard: return "Área de Transferência"
         case .history: return "Histórico"
         case .recordings: return "Gravações"
         }
@@ -29,6 +31,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .appearance: return "paintpalette.fill"
         case .models: return "sparkles"
         case .transcription: return "waveform"
+        case .clipboard: return "doc.on.clipboard"
         case .history: return "clock.arrow.circlepath"
         case .recordings: return "folder.fill"
         }
@@ -40,6 +43,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .appearance: return "Tema da interface e visual da barra de gravação."
         case .models: return "API OpenAI e modelo local."
         case .transcription: return "Idioma do ditado e substituição de palavras."
+        case .clipboard: return "Textos copiados e capturas de tela."
         case .history: return "Transcrições salvas neste Mac."
         case .recordings: return "O que fazer com os arquivos de áudio."
         }
@@ -181,6 +185,8 @@ struct SettingsView: View {
                     modelsTab
                 case .transcription:
                     transcriptionTab
+                case .clipboard:
+                    ClipboardSettingsView(viewModel: viewModel)
                 case .history:
                     HistorySettingsView(viewModel: viewModel)
                 case .recordings:

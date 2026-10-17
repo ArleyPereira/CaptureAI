@@ -17,7 +17,7 @@ nonisolated final class GlobalHotkeyService: GlobalHotkeyServiceProtocol, @unche
     private var modifiers: UInt32 = DictationHotkey.default.modifiers
 
     private let hotKeyID = EventHotKeyID(
-        signature: FourCharCode("VIA1"),
+        signature: FourCharCode(fromString: "VIA1"),
         id: 1
     )
 
@@ -113,6 +113,24 @@ nonisolated final class GlobalHotkeyService: GlobalHotkeyServiceProtocol, @unche
                     .fromOpaque(userData)
                     .takeUnretainedValue()
 
+                // O handler fica no dispatcher global e recebe os eventos de
+                // todos os atalhos do app — inclusive o da captura de tela.
+                // Sem conferir a identidade, apertar Print Screen começaria uma
+                // gravação.
+                var firedID = EventHotKeyID()
+                let readStatus = GetEventParameter(
+                    event,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &firedID
+                )
+                guard readStatus == noErr,
+                      firedID.signature == service.hotKeyID.signature,
+                      firedID.id == service.hotKeyID.id else { return noErr }
+
                 let kind = GetEventKind(event)
                 if kind == UInt32(kEventHotKeyPressed) {
                     service.handlePressed()
@@ -159,13 +177,3 @@ nonisolated final class GlobalHotkeyService: GlobalHotkeyServiceProtocol, @unche
     }
 }
 
-private extension FourCharCode {
-    init(_ string: String) {
-        precondition(string.utf8.count == 4)
-        var result: FourCharCode = 0
-        for byte in string.utf8 {
-            result = (result << 8) + FourCharCode(byte)
-        }
-        self = result
-    }
-}

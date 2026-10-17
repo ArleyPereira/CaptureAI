@@ -15,6 +15,11 @@ final class AppSettings {
         static let recordingHUDStyle = "settings.recordingHUDStyle"
         static let hotkeyKeyCode = "settings.hotkeyKeyCode"
         static let hotkeyModifiers = "settings.hotkeyModifiers"
+        static let isClipboardHistoryEnabled = "settings.isClipboardHistoryEnabled"
+        static let screenshotDirectoryBookmark = "settings.screenshotDirectoryBookmark"
+        static let screenshotDirectoryPath = "settings.screenshotDirectoryPath"
+        static let captureHotkeyKeyCode = "settings.captureHotkeyKeyCode"
+        static let captureHotkeyModifiers = "settings.captureHotkeyModifiers"
     }
 
     private let apiKeyStore: any APIKeyProvider
@@ -84,6 +89,44 @@ final class AppSettings {
         }
     }
 
+    /// Quando `true`, cada cópia entra no histórico da área de transferência.
+    var isClipboardHistoryEnabled: Bool {
+        didSet {
+            defaults.set(isClipboardHistoryEnabled, forKey: DefaultsKey.isClipboardHistoryEnabled)
+        }
+    }
+
+    /// Pasta onde as capturas de tela são gravadas.
+    ///
+    /// `nil` significa o padrão (`~/Documentos/CaptureAI`). Guardamos o caminho
+    /// legível para poder exibi-lo sem resolver nada, mas quem manda é o
+    /// *bookmark*: caminho puro deixa de valer se a pasta for movida ou
+    /// renomeada, e o bookmark acompanha a pasta.
+    private(set) var screenshotDirectoryURL: URL?
+
+    /// Caminho exibido na tela, já encurtado com `~`.
+    var screenshotDirectoryDisplayPath: String {
+        let url = screenshotDirectoryURL ?? ScreenshotStore.defaultDirectoryURL
+        return url.path.replacingOccurrences(
+            of: FileManager.default.homeDirectoryForCurrentUser.path,
+            with: "~"
+        )
+    }
+
+    /// Código Carbon da tecla do atalho de captura de tela.
+    var captureHotkeyKeyCode: Int {
+        didSet {
+            defaults.set(captureHotkeyKeyCode, forKey: DefaultsKey.captureHotkeyKeyCode)
+        }
+    }
+
+    /// Modificadores Carbon do atalho de captura de tela.
+    var captureHotkeyModifiers: Int {
+        didSet {
+            defaults.set(captureHotkeyModifiers, forKey: DefaultsKey.captureHotkeyModifiers)
+        }
+    }
+
     /// Indica se existe API key salva no Keychain (sem expor o valor).
     private(set) var hasAPIKey: Bool
 
@@ -140,7 +183,76 @@ final class AppSettings {
             self.hotkeyModifiers = defaults.integer(forKey: DefaultsKey.hotkeyModifiers)
         }
 
+        if defaults.object(forKey: DefaultsKey.isClipboardHistoryEnabled) == nil {
+            self.isClipboardHistoryEnabled = true
+        } else {
+            self.isClipboardHistoryEnabled = defaults.bool(forKey: DefaultsKey.isClipboardHistoryEnabled)
+        }
+
+        if defaults.object(forKey: DefaultsKey.captureHotkeyKeyCode) == nil {
+            self.captureHotkeyKeyCode = Int(CaptureHotkey.default.keyCode)
+        } else {
+            self.captureHotkeyKeyCode = defaults.integer(forKey: DefaultsKey.captureHotkeyKeyCode)
+        }
+
+        if defaults.object(forKey: DefaultsKey.captureHotkeyModifiers) == nil {
+            self.captureHotkeyModifiers = Int(CaptureHotkey.default.modifiers)
+        } else {
+            self.captureHotkeyModifiers = defaults.integer(forKey: DefaultsKey.captureHotkeyModifiers)
+        }
+
+        self.screenshotDirectoryURL = Self.resolveScreenshotDirectory(from: defaults)
+
         self.hasAPIKey = apiKeyStore.hasAPIKey
+    }
+
+    /// Guarda a pasta escolhida pelo usuário, com bookmark para sobreviver a
+    /// renomeações. `nil` volta ao padrão.
+    func setScreenshotDirectory(_ url: URL?) {
+        guard let url else {
+            defaults.removeObject(forKey: DefaultsKey.screenshotDirectoryBookmark)
+            defaults.removeObject(forKey: DefaultsKey.screenshotDirectoryPath)
+            screenshotDirectoryURL = nil
+            return
+        }
+
+        if let bookmark = try? url.bookmarkData(options: [.withSecurityScope]) {
+            defaults.set(bookmark, forKey: DefaultsKey.screenshotDirectoryBookmark)
+        }
+        defaults.set(url.path, forKey: DefaultsKey.screenshotDirectoryPath)
+        screenshotDirectoryURL = url
+    }
+
+    /// Resolve o bookmark; cai no caminho salvo quando ele falha.
+    private static func resolveScreenshotDirectory(from defaults: UserDefaults) -> URL? {
+        if let bookmark = defaults.data(forKey: DefaultsKey.screenshotDirectoryBookmark) {
+            var isStale = false
+            if let url = try? URL(
+                resolvingBookmarkData: bookmark,
+                options: [.withSecurityScope],
+                bookmarkDataIsStale: &isStale
+            ), !isStale {
+                return url
+            }
+        }
+        guard let path = defaults.string(forKey: DefaultsKey.screenshotDirectoryPath), !path.isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    /// Atalho de captura tipado a partir dos inteiros persistidos.
+    var captureHotkey: CaptureHotkey {
+        get {
+            CaptureHotkey(
+                keyCode: UInt32(captureHotkeyKeyCode),
+                modifiers: UInt32(captureHotkeyModifiers)
+            )
+        }
+        set {
+            captureHotkeyKeyCode = Int(newValue.keyCode)
+            captureHotkeyModifiers = Int(newValue.modifiers)
+        }
     }
 
     /// Atalho de ditado tipado a partir dos inteiros persistidos.
