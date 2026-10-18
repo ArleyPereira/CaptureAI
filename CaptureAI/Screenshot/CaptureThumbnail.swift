@@ -13,6 +13,8 @@ import UniformTypeIdentifiers
 final class CaptureThumbnailController {
     /// Miniaturas na tela, da mais nova (na frente) para a mais antiga.
     private var stack: [NSPanel] = []
+    /// Posição de cada miniatura na pilha, lida pela view.
+    private var placements: [ObjectIdentifier: ThumbnailPlacement] = [:]
 
     private static let margin: CGFloat = 24
     /// Degrau da escada: cada miniatura mais antiga sobe, deixando a borda de
@@ -43,7 +45,9 @@ final class CaptureThumbnailController {
                 if let panel = box.panel { self?.dismiss(panel) }
             }
         }
+        let placement = ThumbnailPlacement()
         let root = CaptureThumbnailView(
+            placement: placement,
             image: nsImage,
             size: thumbSize,
             onCopy: {
@@ -93,6 +97,7 @@ final class CaptureThumbnailController {
 
         // A nova entra no degrau da frente; as anteriores sobem um degrau.
         stack.insert(panel, at: 0)
+        placements[ObjectIdentifier(panel)] = placement
         let finalFrame = frame(forStep: 0, size: panelSize)
 
         // Entra deslizando da borda esquerda. A posição anima via `setFrame`:
@@ -116,6 +121,7 @@ final class CaptureThumbnailController {
     func dismiss(_ panel: NSPanel) {
         guard let index = stack.firstIndex(of: panel) else { return }
         stack.remove(at: index)
+        placements[ObjectIdentifier(panel)] = nil
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.22
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -145,10 +151,10 @@ final class CaptureThumbnailController {
     /// meio da animação de entrada, não é tocada.
     func restoreAll() {
         for panel in hidden where stack.contains(panel) {
-            panel.ignoresMouseEvents = false
             panel.alphaValue = 1
         }
         hidden = []
+        updateFront()
     }
 
     /// Escondidas pela captura em andamento.
@@ -170,8 +176,19 @@ final class CaptureThumbnailController {
         )
     }
 
+    /// Só a da frente responde ao mouse: as de trás não mostram controles,
+    /// não recebem clique e não podem ser arrastadas.
+    private func updateFront() {
+        for (index, panel) in stack.enumerated() {
+            let isFront = index == 0
+            panel.ignoresMouseEvents = !isFront
+            placements[ObjectIdentifier(panel)]?.isFront = isFront
+        }
+    }
+
     /// Leva cada miniatura ao degrau da sua posição na pilha.
     private func layoutStack(skipping skipped: NSPanel? = nil) {
+        updateFront()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.25
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -193,6 +210,12 @@ final class CaptureThumbnailController {
     /// lugar fixo que pede um objeto de tamanho fixo. 210×150 (7:5) é a medida
     /// da miniatura do CleanShot X.
     private static let thumbnailSize = NSSize(width: 210, height: 150)
+}
+
+/// Se a miniatura está na frente da pilha — só ela mostra controles.
+@Observable
+final class ThumbnailPlacement {
+    var isFront = true
 }
 
 /// Referência tardia ao painel de uma miniatura, para os fechamentos da view.
@@ -445,6 +468,7 @@ final class ThumbnailDragSource: NSObject, NSDraggingSource {
 }
 
 private struct CaptureThumbnailView: View {
+    let placement: ThumbnailPlacement
     let image: NSImage
     let size: NSSize
     let onCopy: () -> Void
@@ -464,7 +488,10 @@ private struct CaptureThumbnailView: View {
                 .frame(width: size.width, height: size.height)
                 .clipped()
 
-            if isHovering {
+            // Uma miniatura que foi para trás com o mouse em cima não recebe o
+            // "mouse saiu" — ela passa a ignorar o mouse. Sem esta condição,
+            // os controles ficariam presos nela.
+            if isHovering && placement.isFront {
                 Color.black.opacity(0.38)
                     .transition(.opacity)
 
@@ -498,6 +525,8 @@ private struct CaptureThumbnailView: View {
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.15)) { isHovering = hovering }
         }
+        // Mudou de posição na pilha: o hover que ficou para trás não vale mais.
+        .onChange(of: placement.isFront) { isHovering = false }
     }
 
     /// O rótulo nunca muda; a confirmação é o check que aparece ao lado.
