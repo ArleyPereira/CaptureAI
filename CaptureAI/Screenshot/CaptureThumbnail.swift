@@ -11,9 +11,16 @@ import UniformTypeIdentifiers
 /// não tira o foco de onde a pessoa estava digitando.
 @MainActor
 final class CaptureThumbnailController {
-    private var panel: NSPanel?
+    /// Miniaturas na tela, da mais nova (na frente) para a mais antiga.
+    private var stack: [NSPanel] = []
 
     private static let margin: CGFloat = 24
+    /// Degrau da escada: cada miniatura mais antiga sobe e vai um pouco para a
+    /// direita, deixando a borda de cima e a lateral aparecendo atrás da nova.
+    private static let step = CGSize(width: 10, height: 14)
+    /// A partir daqui as mais antigas se acumulam no último degrau, para a
+    /// escada não subir pela tela.
+    private static let maxVisibleSteps = 5
 
     func show(
         image: CGImage,
@@ -21,17 +28,19 @@ final class CaptureThumbnailController {
         onCopy: @escaping () -> Void,
         onSave: @escaping () -> Bool
     ) {
-        dismiss(animated: false)
-
         let pointSize = NSSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
         let thumbSize = Self.thumbnailSize
         let nsImage = NSImage(cgImage: image, size: pointSize)
+
+        // O painel ainda não existe quando os fechamentos são montados; eles
+        // o buscam por esta caixa, preenchida logo abaixo.
+        let box = PanelBox()
 
         // Toda ação fecha a miniatura; as que confirmam algo mostram o check
         // por um instante antes, para o clique não parecer ter caído no vazio.
         let closeAfterConfirmation: () -> Void = { [weak self] in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-                self?.dismiss(animated: true)
+                if let panel = box.panel { self?.dismiss(panel) }
             }
         }
         let root = CaptureThumbnailView(
@@ -46,7 +55,15 @@ final class CaptureThumbnailController {
                 closeAfterConfirmation()
                 return ok
             },
-            onClose: { [weak self] in self?.dismiss(animated: true) }
+            onClose: { [weak self] in
+                if let panel = box.panel { self?.dismiss(panel) }
+            },
+            onHoverChanged: { [weak self] hovering in
+                guard let self, let panel = box.panel else { return }
+                // Uma miniatura de trás vem para a frente enquanto o mouse está
+                // nela, com os controles acessíveis; ao sair, volta ao degrau.
+                if hovering { panel.orderFrontRegardless() } else { self.restoreOrder() }
+            }
         )
 
         // O painel tem exatamente o tamanho da miniatura: a sombra é a nativa
@@ -58,7 +75,9 @@ final class CaptureThumbnailController {
         hosting.image = image
         hosting.preview = nsImage
         // Solto numa pasta, o trabalho da miniatura acabou — como no CleanShot.
-        hosting.onDropped = { [weak self] in self?.dismiss(animated: true) }
+        hosting.onDropped = { [weak self] in
+            if let panel = box.panel { self?.dismiss(panel) }
+        }
 
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: panelSize),
@@ -76,17 +95,14 @@ final class CaptureThumbnailController {
         panel.acceptsMouseMovedEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         panel.contentView = hosting
+        box.panel = panel
 
-        // No monitor onde está o mouse: é onde a captura acabou de acontecer.
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main ?? NSScreen.screens[0]
-        let visible = screen.visibleFrame
-        let finalOrigin = CGPoint(x: visible.minX + Self.margin, y: visible.minY + Self.margin)
+        // A nova entra no degrau da frente; as anteriores sobem um degrau.
+        stack.insert(panel, at: 0)
+        let finalFrame = frame(forStep: 0, size: panelSize)
 
         // Entra deslizando da borda esquerda. A posição anima via `setFrame`:
-        // o proxy `animator()` não anima `setFrameOrigin`, e a janela ficava
-        // parada no ponto de partida, cortada pela borda da tela.
-        let finalFrame = NSRect(origin: finalOrigin, size: panelSize)
+        // o proxy `animator()` não anima `setFrameOrigin`.
         panel.setFrame(finalFrame.offsetBy(dx: -40, dy: 0), display: false)
         panel.alphaValue = 0
         panel.orderFrontRegardless()
@@ -96,20 +112,16 @@ final class CaptureThumbnailController {
             panel.animator().setFrame(finalFrame, display: true)
             panel.animator().alphaValue = 1
         }
+        layoutStack(skipping: panel)
         // A sombra nativa acompanha o contorno do conteúdo, mas só depois de o
         // SwiftUI desenhar os cantos arredondados; antes disso ela sairia reta.
         DispatchQueue.main.async { panel.invalidateShadow() }
-        self.panel = panel
     }
 
-    func dismiss(animated: Bool) {
-        guard let panel else { return }
-        self.panel = nil
-        guard animated else {
-            panel.orderOut(nil)
-            panel.close()
-            return
-        }
+    /// Fecha uma miniatura; as que estavam atrás descem um degrau.
+    func dismiss(_ panel: NSPanel) {
+        guard let index = stack.firstIndex(of: panel) else { return }
+        stack.remove(at: index)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.22
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -119,6 +131,67 @@ final class CaptureThumbnailController {
             panel.orderOut(nil)
             panel.close()
         }
+        layoutStack()
+        restoreOrder()
+    }
+
+    /// Some com a pilha durante uma captura — ela apareceria dentro da foto —
+    /// sem perder nenhuma miniatura.
+    func hideAll() {
+        hidden = stack
+        for panel in hidden {
+            panel.alphaValue = 0
+            panel.ignoresMouseEvents = true
+        }
+    }
+
+    var isEmpty: Bool { stack.isEmpty }
+
+    /// Traz de volta só as que foram escondidas: a nova, que pode estar no
+    /// meio da animação de entrada, não é tocada.
+    func restoreAll() {
+        for panel in hidden where stack.contains(panel) {
+            panel.ignoresMouseEvents = false
+            panel.alphaValue = 1
+        }
+        hidden = []
+    }
+
+    /// Escondidas pela captura em andamento.
+    private var hidden: [NSPanel] = []
+
+    // MARK: - Escada
+
+    private func frame(forStep step: Int, size: NSSize) -> NSRect {
+        // No monitor onde está o mouse: é onde a captura acabou de acontecer.
+        let mouse = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main ?? NSScreen.screens[0]
+        let visible = screen.visibleFrame
+        let level = CGFloat(min(step, Self.maxVisibleSteps))
+        return NSRect(
+            x: visible.minX + Self.margin + level * Self.step.width,
+            y: visible.minY + Self.margin + level * Self.step.height,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    /// Leva cada miniatura ao degrau da sua posição na pilha.
+    private func layoutStack(skipping skipped: NSPanel? = nil) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            for (index, panel) in stack.enumerated() where panel !== skipped {
+                panel.animator().setFrame(frame(forStep: index, size: panel.frame.size), display: true)
+            }
+        }
+    }
+
+    /// Ordem na tela igual à da pilha: a mais nova por cima.
+    private func restoreOrder() {
+        for panel in stack.reversed() {
+            panel.orderFrontRegardless()
+        }
     }
 
     /// Tamanho fixo, qualquer que seja o formato da captura: uma miniatura que
@@ -126,6 +199,11 @@ final class CaptureThumbnailController {
     /// lugar fixo que pede um objeto de tamanho fixo. 210×150 (7:5) é a medida
     /// da miniatura do CleanShot X.
     private static let thumbnailSize = NSSize(width: 210, height: 150)
+}
+
+/// Referência tardia ao painel de uma miniatura, para os fechamentos da view.
+private final class PanelBox {
+    weak var panel: NSPanel?
 }
 
 /// Hospeda a miniatura e a torna arrastável como um arquivo de imagem.
@@ -378,6 +456,7 @@ private struct CaptureThumbnailView: View {
     let onCopy: () -> Void
     let onSave: () -> Bool
     let onClose: () -> Void
+    var onHoverChanged: (Bool) -> Void = { _ in }
 
     @State private var isHovering = false
     @State private var copied = false
@@ -425,6 +504,7 @@ private struct CaptureThumbnailView: View {
         }
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.15)) { isHovering = hovering }
+            onHoverChanged(hovering)
         }
     }
 

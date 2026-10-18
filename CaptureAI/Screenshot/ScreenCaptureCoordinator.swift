@@ -29,6 +29,8 @@ final class ScreenCaptureCoordinator {
     }
 
     private func performCapture(mode: CaptureMode) async {
+        await hideThumbnailsForCapture()
+        defer { thumbnail.restoreAll() }
         do {
             switch try await service.captureInteractively(mode: mode) {
             case .cancelled:
@@ -95,6 +97,15 @@ final class ScreenCaptureCoordinator {
         NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
     }
 
+    /// Esconde as miniaturas abertas antes de congelar a tela — apareceriam
+    /// dentro da foto — e espera um instante para elas deixarem a tela de fato.
+    /// Elas voltam ao fim da captura, com a nova (se houver) por cima.
+    private func hideThumbnailsForCapture() async {
+        guard !thumbnail.isEmpty else { return }
+        thumbnail.hideAll()
+        try? await Task.sleep(for: .milliseconds(60))
+    }
+
     /// Acorde Print Screen + F: a tela inteira vai direto para a miniatura.
     /// Com o editor aberto ou abrindo, ele entrega a própria foto congelada.
     func requestFullScreen() {
@@ -102,11 +113,9 @@ final class ScreenCaptureCoordinator {
             service.requestFullScreen()
             return
         }
-        // Uma miniatura anterior apareceria dentro da foto: sai antes, e a
-        // captura espera um instante para ela deixar a tela de fato.
-        thumbnail.dismiss(animated: false)
         Task {
-            try? await Task.sleep(for: .milliseconds(60))
+            await hideThumbnailsForCapture()
+            defer { thumbnail.restoreAll() }
             do {
                 if case .thumbnail(let image, let scale) = try await service.captureFullScreen() {
                     showThumbnail(image, scale: scale)
