@@ -33,6 +33,45 @@ final class ScreenCaptureService {
     /// Print Screen chega enquanto a tela ainda está sendo congelada.
     private var pendingMode: CaptureMode?
 
+    /// Tela inteira pedida enquanto a tela ainda estava sendo congelada.
+    private var pendingFullScreen = false
+
+    /// Pede a tela inteira para o editor aberto ou o que está abrindo.
+    func requestFullScreen() {
+        if editor.isPresenting {
+            editor.captureFullScreen()
+        } else if isCapturing {
+            pendingFullScreen = true
+        }
+    }
+
+    /// Tela inteira direto, sem passar pelo editor: o monitor onde está o
+    /// mouse, com todas as janelas como estão.
+    func captureFullScreen() async throws -> Outcome {
+        guard !isCapturing, !editor.isPresenting else { return .cancelled }
+        guard ScreenRecordingPermission.isGranted else {
+            ScreenRecordingPermission.request()
+            throw CaptureError.permissionDenied
+        }
+        isCapturing = true
+        defer { isCapturing = false }
+
+        let frozen: [ScreenFreezer.FrozenScreen]
+        do {
+            frozen = try await ScreenFreezer.freezeAll()
+        } catch {
+            throw CaptureError.freezeFailed(error.localizedDescription)
+        }
+        guard let shot = Self.screenUnderMouse(in: frozen) else { throw CaptureError.freezeFailed("nenhum monitor") }
+        logger.notice("Tela inteira: \(shot.image.width, privacy: .public)×\(shot.image.height, privacy: .public) px.")
+        return .thumbnail(shot.image, scale: shot.screen.backingScaleFactor)
+    }
+
+    private static func screenUnderMouse(in frozen: [ScreenFreezer.FrozenScreen]) -> ScreenFreezer.FrozenScreen? {
+        let mouse = NSEvent.mouseLocation
+        return frozen.first { $0.screen.frame.contains(mouse) } ?? frozen.first
+    }
+
     /// Pede o modo janela. Vale para o editor aberto ou para o que está abrindo.
     func requestWindowMode() {
         if editor.isPresenting {
@@ -46,9 +85,9 @@ final class ScreenCaptureService {
     enum Outcome {
         case copy(CGImage, scale: CGFloat)
         case save(CGImage, scale: CGFloat)
-        /// Captura de janela: ganha a miniatura flutuante, onde se decide entre
-        /// copiar e salvar — é o único modo sem barra de ações na tela.
-        case window(CGImage, scale: CGFloat)
+        /// Janela ou tela inteira: ganha a miniatura flutuante, onde se decide
+        /// entre copiar e salvar — são os modos sem barra de ações na tela.
+        case thumbnail(CGImage, scale: CGFloat)
         case cancelled
     }
 
@@ -68,6 +107,7 @@ final class ScreenCaptureService {
         defer {
             isCapturing = false
             pendingMode = nil
+            pendingFullScreen = false
         }
         // Tirada antes do congelamento: depois dele o editor já estaria por cima.
         let capturable = CapturableWindow.onScreen()
@@ -81,6 +121,11 @@ final class ScreenCaptureService {
         }
         guard !frozen.isEmpty else { throw CaptureError.freezeFailed("nenhum monitor") }
         logger.notice("Tela congelada: \(frozen.count, privacy: .public) monitor(es).")
+
+        // O F chegou enquanto congelava: a foto já é a tela inteira, nem abre o editor.
+        if pendingFullScreen, let shot = Self.screenUnderMouse(in: frozen) {
+            return .thumbnail(shot.image, scale: shot.screen.backingScaleFactor)
+        }
 
         let result = await withCheckedContinuation { continuation in
             editor.present(
@@ -102,7 +147,10 @@ final class ScreenCaptureService {
         case .window(let window, let screen):
             let image = try await WindowCaptureComposer.compose(window, on: screen)
             logger.notice("Janela capturada (\(window.ownerName, privacy: .public)): \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
-            return .window(image, scale: screen.backingScaleFactor)
+            return .thumbnail(image, scale: screen.backingScaleFactor)
+        case .fullScreen(let image, let scale):
+            logger.notice("Tela inteira: \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
+            return .thumbnail(image, scale: scale)
         case .cancelled:
             logger.notice("Captura cancelada.")
             return .cancelled

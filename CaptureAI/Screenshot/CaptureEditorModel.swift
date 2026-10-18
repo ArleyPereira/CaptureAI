@@ -385,6 +385,7 @@ final class CaptureEditorModel {
     @ObservationIgnored var onCopy: () -> Void = {}
     @ObservationIgnored var onSave: () -> Void = {}
     @ObservationIgnored var onCancel: () -> Void = {}
+    @ObservationIgnored var onFullScreen: () -> Void = {}
     @ObservationIgnored var onCaptureWindow: (CapturableWindow) -> Void = { _ in }
     @ObservationIgnored var onOpenColorPanel: () -> Void = {}
     /// Pede redesenho e devolve o teclado ao editor depois de um clique na barra.

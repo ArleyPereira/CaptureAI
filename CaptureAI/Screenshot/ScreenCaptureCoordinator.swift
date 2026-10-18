@@ -39,10 +39,10 @@ final class ScreenCaptureCoordinator {
                 copy(image, scale: scale)
             case .save(let image, _):
                 save(image)
-            case .window(let image, let scale):
-                // No modo janela não há barra na tela: a decisão fica para a
-                // miniatura. Nada vai para a área de transferência nem para a
-                // pasta até a pessoa escolher Copy ou Save.
+            case .thumbnail(let image, let scale):
+                // Janela e tela inteira não têm barra na tela: a decisão fica
+                // para a miniatura. Nada vai para a área de transferência nem
+                // para a pasta até a pessoa escolher Copy ou Save.
                 showThumbnail(image, scale: scale)
             }
         } catch {
@@ -93,6 +93,29 @@ final class ScreenCaptureCoordinator {
 
     private static func png(_ image: CGImage) -> Data? {
         NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+    }
+
+    /// Acorde Print Screen + F: a tela inteira vai direto para a miniatura.
+    /// Com o editor aberto ou abrindo, ele entrega a própria foto congelada.
+    func requestFullScreen() {
+        if service.isBusy {
+            service.requestFullScreen()
+            return
+        }
+        // Uma miniatura anterior apareceria dentro da foto: sai antes, e a
+        // captura espera um instante para ela deixar a tela de fato.
+        thumbnail.dismiss(animated: false)
+        Task {
+            try? await Task.sleep(for: .milliseconds(60))
+            do {
+                if case .thumbnail(let image, let scale) = try await service.captureFullScreen() {
+                    showThumbnail(image, scale: scale)
+                }
+            } catch {
+                logger.error("Tela inteira falhou: \(error.localizedDescription, privacy: .public)")
+                lastMessage = error.localizedDescription
+            }
+        }
     }
 
     /// Acorde Print Screen + W: abre direto no modo janela ou, se o editor

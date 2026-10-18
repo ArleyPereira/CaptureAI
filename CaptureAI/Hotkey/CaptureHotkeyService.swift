@@ -4,12 +4,12 @@ import Foundation
 /// Monitoramento global do atalho de captura de tela.
 ///
 /// A captura de área começa ao **soltar** o atalho principal, não ao apertar:
-/// enquanto ele está segurado a pessoa ainda pode estar no meio do acorde
-/// Print Screen + W, e escurecer a tela antes da hora atropelaria a escolha.
-/// Com o principal segurado, o W vira atalho e abre direto a captura de
-/// janela; aí o soltar não faz mais nada. O macOS não registra acorde de duas teclas comuns, então
-/// o W é registrado ao pressionar e removido ao soltar: fora desse instante
-/// ele volta a digitar W normalmente em qualquer app.
+/// enquanto ele está segurado a pessoa ainda pode estar no meio de um acorde,
+/// e escurecer a tela antes da hora atropelaria a escolha. Com o principal
+/// segurado, W abre a captura de janela e F a de tela inteira; aí o soltar não
+/// faz mais nada. O macOS não registra acorde de duas teclas comuns, então W
+/// e F são registradas ao pressionar e removidas ao soltar: fora desse
+/// instante voltam a digitar normalmente em qualquer app.
 ///
 /// O handler Carbon fica no dispatcher global e recebe os eventos de todos os
 /// atalhos do app, por isso confere a identidade de cada um e devolve
@@ -20,14 +20,16 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
     var onTriggered: (@Sendable () -> Void)?
     /// Captura de janela: W apertado com o atalho principal segurado.
     var onWindowModeRequested: (@Sendable () -> Void)?
+    /// Tela inteira: F apertado com o atalho principal segurado.
+    var onFullScreenRequested: (@Sendable () -> Void)?
 
     /// O atalho principal está pressionado agora.
     private var isMainHeld = false
-    /// O acorde já disparou a captura de janela; o soltar não abre outra.
+    /// O acorde já disparou uma captura; o soltar não abre outra.
     private var chordConsumed = false
 
     private var hotKeyRef: EventHotKeyRef?
-    private var modeKeyRef: EventHotKeyRef?
+    private var modeKeyRefs: [EventHotKeyRef] = []
     private var handlerRef: EventHandlerRef?
     private var keyCode: UInt32 = CaptureHotkey.default.keyCode
     private var modifiers: UInt32 = CaptureHotkey.default.modifiers
@@ -35,7 +37,8 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
 
     private static let signature = FourCharCode(fromString: "CAP1")
     private let mainID = EventHotKeyID(signature: CaptureHotkeyService.signature, id: 2)
-    private let modeKeyID = EventHotKeyID(signature: CaptureHotkeyService.signature, id: 3)
+    private let windowKeyID = EventHotKeyID(signature: CaptureHotkeyService.signature, id: 3)
+    private let fullScreenKeyID = EventHotKeyID(signature: CaptureHotkeyService.signature, id: 4)
 
     func start(keyCode: UInt32, modifiers: UInt32) {
         stop()
@@ -84,24 +87,24 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
         }
     }
 
-    /// W vira atalho só enquanto o principal está segurado.
+    /// W e F viram atalho só enquanto o principal está segurado.
     private func registerModeKey() {
         lock.lock()
         defer { lock.unlock() }
-        guard modeKeyRef == nil else { return }
-        var ref: EventHotKeyRef?
-        if RegisterEventHotKey(UInt32(kVK_ANSI_W), 0, modeKeyID, GetEventDispatcherTarget(), 0, &ref) == noErr {
-            modeKeyRef = ref
+        guard modeKeyRefs.isEmpty else { return }
+        for (key, id) in [(kVK_ANSI_W, windowKeyID), (kVK_ANSI_F, fullScreenKeyID)] {
+            var ref: EventHotKeyRef?
+            if RegisterEventHotKey(UInt32(key), 0, id, GetEventDispatcherTarget(), 0, &ref) == noErr, let ref {
+                modeKeyRefs.append(ref)
+            }
         }
     }
 
     private func unregisterModeKey() {
         lock.lock()
         defer { lock.unlock() }
-        if let modeKeyRef {
-            UnregisterEventHotKey(modeKeyRef)
-            self.modeKeyRef = nil
-        }
+        modeKeyRefs.forEach { UnregisterEventHotKey($0) }
+        modeKeyRefs.removeAll()
     }
 
     // MARK: - Eventos
@@ -160,11 +163,15 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
             unregisterModeKey()
             if !chordConsumed { onTriggered?() }
             chordConsumed = false
-        case (modeKeyID.id, true):
+        case (windowKeyID.id, true):
             guard isMainHeld, !chordConsumed else { break }
             chordConsumed = true
             onWindowModeRequested?()
-        case (modeKeyID.id, false):
+        case (fullScreenKeyID.id, true):
+            guard isMainHeld, !chordConsumed else { break }
+            chordConsumed = true
+            onFullScreenRequested?()
+        case (windowKeyID.id, false), (fullScreenKeyID.id, false):
             break
         default:
             return OSStatus(eventNotHandledErr)

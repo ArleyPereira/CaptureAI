@@ -7,6 +7,8 @@ enum CaptureEditorResult {
     case save(CGImage, scale: CGFloat)
     /// Modo janela: a janela escolhida e o monitor onde ela estava.
     case window(CapturableWindow, screen: NSScreen)
+    /// Tela inteira do monitor onde está o mouse, da foto congelada.
+    case fullScreen(CGImage, scale: CGFloat)
     case cancelled
 }
 
@@ -36,6 +38,7 @@ final class CaptureEditorController {
         model.onCopy = { [weak self] in self?.finish(asCopy: true) }
         model.onSave = { [weak self] in self?.finish(asCopy: false) }
         model.onCancel = { [weak self] in self?.complete(with: .cancelled) }
+        model.onFullScreen = { [weak self] in self?.captureFullScreen() }
         model.onChange = { [weak self] in self?.refresh() }
         model.onOpenColorPanel = { [weak self] in self?.openColorPanel() }
         model.onCaptureWindow = { [weak self] window in
@@ -77,6 +80,15 @@ final class CaptureEditorController {
                 window.editor.syncWithMouse()
             }
         }
+    }
+
+    /// Tela inteira: a foto congelada do monitor onde está o mouse, inteira.
+    func captureFullScreen() {
+        guard isPresenting else { return }
+        let mouse = NSEvent.mouseLocation
+        guard let window = windows.first(where: { $0.frame.contains(mouse) }) ?? windows.first else { return }
+        window.editor.endBubbleEditing()
+        complete(with: .fullScreen(window.editor.frozen, scale: window.backingScaleFactor))
     }
 
     /// Troca de modo vinda de fora — o W segurado junto com o Print Screen.

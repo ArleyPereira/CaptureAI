@@ -300,6 +300,11 @@ final class AppState {
                 self?.captureCoordinator.requestWindowMode()
             }
         }
+        captureHotkeyService.onFullScreenRequested = { [weak self] in
+            Task { @MainActor in
+                self?.captureCoordinator.requestFullScreen()
+            }
+        }
         let hotkey = settings.captureHotkey
         captureHotkeyService.start(keyCode: hotkey.keyCode, modifiers: hotkey.modifiers)
     }

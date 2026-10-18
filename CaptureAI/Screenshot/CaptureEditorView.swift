@@ -104,7 +104,7 @@ final class CaptureEditorView: NSView {
 
         guard let selection else {
             drawGuides(context)
-            drawHint(context, text: "Arraste para selecionar  ·  W para janela  ·  Esc para sair")
+            drawHint(context, text: "Arraste para selecionar  ·  W para janela  ·  F para tela inteira  ·  Esc para sair")
             return
         }
 
@@ -159,7 +159,7 @@ final class CaptureEditorView: NSView {
             context.setLineWidth(2.5)
             context.strokePath()
         }
-        drawHint(context, text: "Clique numa janela ou na área de trabalho  ·  W para área  ·  Esc para sair")
+        drawHint(context, text: "Clique numa janela ou na área de trabalho  ·  W para área  ·  F para tela inteira  ·  Esc para sair")
     }
 
     private static let accent = NSColor(red: 0.35, green: 0.78, blue: 0.98, alpha: 1)
@@ -671,6 +671,7 @@ final class CaptureEditorView: NSView {
         case 53: model.onCancel()                       // Esc
         case 36, 76: if selection != nil { model.onCopy() }  // Enter
         case 13: model.toggleMode()                     // W
+        case 3: model.onFullScreen()                    // F
         default: super.keyDown(with: event)
         }
     }

@@ -242,7 +242,7 @@ struct ClipboardSettingsView: View {
                 VStack(spacing: 12) {
                     SettingsRow(
                         title: "Atalho",
-                        description: "Solte para selecionar uma área. Segure e aperte W para capturar uma janela."
+                        description: "Solte para selecionar uma área. Segure e aperte W para uma janela, ou F para a tela inteira."
                     ) {
                         HStack(spacing: 4) {
                             ForEach(Array(viewModel.captureHotkey.keyParts.enumerated()), id: \.offset) { _, part in
