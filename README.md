@@ -1,4 +1,4 @@
-# VoiceIA
+# CaptureAI
 
 Ditado por voz para macOS. Você segura um atalho, fala, e o texto aparece no
 campo em que estava — em qualquer app, sem copiar e colar.
@@ -51,19 +51,19 @@ da memória após 10 minutos ociosos, para o app não ocupar ~1 GB de RAM parado
 local usa o Neural Engine).
 
 ```bash
-git clone https://github.com/ArleyPereira/VoiceIA.git
-cd VoiceIA
-open VoiceIA.xcodeproj
+git clone https://github.com/ArleyPereira/CaptureAI.git
+cd CaptureAI
+open CaptureAI.xcodeproj
 ```
 
-Em seguida, no Xcode: selecione o esquema **VoiceIA** e rode (**⌘R**). A
+Em seguida, no Xcode: selecione o esquema **CaptureAI** e rode (**⌘R**). A
 dependência ([FluidAudio](https://github.com/FluidInference/FluidAudio)) é
 resolvida automaticamente via Swift Package Manager.
 
 Para gerar uma build de release pela linha de comando:
 
 ```bash
-xcodebuild -project VoiceIA.xcodeproj -scheme VoiceIA -configuration Release build
+xcodebuild -project CaptureAI.xcodeproj -scheme CaptureAI -configuration Release build
 ```
 
 ### Primeiro uso
@@ -78,7 +78,7 @@ xcodebuild -project VoiceIA.xcodeproj -scheme VoiceIA -configuration Release bui
 ## Onde ficam seus dados
 
 Tudo é local e fica **fora** do repositório, em
-`~/Library/Application Support/VoiceIA/`:
+`~/Library/Application Support/CaptureAI/`:
 
 | Arquivo | Conteúdo |
 |---|---|
@@ -91,7 +91,7 @@ A chave da API, quando usada, fica no **Keychain** — nunca em arquivo nem em l
 ## Estrutura
 
 ```
-VoiceIA/
+CaptureAI/
 ├─ App/              estado central e ciclo de vida
 ├─ Audio/            captura, medição de nível e reprodução
 ├─ Hotkey/           atalho global

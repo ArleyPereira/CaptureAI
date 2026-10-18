@@ -1,15 +1,15 @@
-# VoiceIA — Foco capturado no início da gravação vs. foco atual na inserção
+# CaptureAI — Foco capturado no início da gravação vs. foco atual na inserção
 
 Documento de referência para retomar e decidir depois.
 Criado em: **2026-08-11**
 Idioma: português
-Projeto: `/Users/arley/Developer/VoiceIA`
+Projeto: `/Users/arley/Developer/CaptureAI`
 
 ---
 
 ## 0. Resumo em uma frase
 
-O VoiceIA guarda o campo em foco **quando a gravação começa** e dá preferência a ele
+O CaptureAI guarda o campo em foco **quando a gravação começa** e dá preferência a ele
 na hora de inserir; se o usuário trocar de campo **durante** a fala, a ditagem vai
 para o campo antigo, não para o que ele escolheu por último.
 
@@ -20,7 +20,7 @@ para o campo antigo, não para o que ele escolheu por último.
 ### 1.1 A captura
 
 `AppState.beginDictationSession` chama `captureFocusBeforeRecordingBestEffort()`
-(`VoiceIA/App/AppState.swift:274`) **antes** de iniciar a gravação. O elemento vai
+(`CaptureAI/App/AppState.swift:274`) **antes** de iniciar a gravação. O elemento vai
 para `capturedFocusedElement` sem nenhum filtro de editabilidade — pode ser um campo
 de texto, uma janela, ou um `AXGroup` do Finder.
 
@@ -55,7 +55,7 @@ frontmost — reativar evita inserir num alvo fantasma.
 
 A condição `resolveEditableTarget(from: captured) != nil` não é decorativa: reativar
 um app cujo elemento capturado **não** é editável rouba o foco que o usuário tenha
-escolhido durante a fala, e ainda faz o VoiceIA ler como "sem campo editável" uma
+escolhido durante a fala, e ainda faz o CaptureAI ler como "sem campo editável" uma
 janela que ele mesmo trouxe para frente. Como um capturado não-editável nunca passa
 pelo `guard` da seção 1.2, ativá-lo não traz ganho em cenário nenhum.
 
@@ -66,7 +66,7 @@ pelo `guard` da seção 1.2, ativá-lo não traz ganho em cenário nenhum.
 **Cenário:** começar a ditar com o **Cursor** em foco e, durante a gravação, clicar
 no input do **Claude**.
 
-**O que acontece:** o capturado (Cursor) é editável, então o VoiceIA reativa o Cursor
+**O que acontece:** o capturado (Cursor) é editável, então o CaptureAI reativa o Cursor
 e insere lá. A escolha mais recente do usuário é ignorada.
 
 Segue em aberto por escolha: mudar isso mexe num caminho que hoje funciona.
@@ -75,7 +75,7 @@ Segue em aberto por escolha: mudar isso mexe num caminho que hoje funciona.
 
 A prioridade não é arbitrária. O foco na hora da inserção é frágil:
 
-- A barra flutuante do VoiceIA pode perturbar o foco ao aparecer/sumir.
+- A barra flutuante do CaptureAI pode perturbar o foco ao aparecer/sumir.
 - Apps Electron demoram a republicar `kAXFocusedUIElement`, e uma leitura precoce
   devolve a janela em vez do campo.
 - Depois de uma transcrição longa o app alvo pode ter perdido o frontmost.
@@ -129,8 +129,8 @@ Se o capturado e o atual forem ambos editáveis e diferentes, oferecer a escolha
 
 | Arquivo | O quê |
 |---|---|
-| `VoiceIA/Input/DefaultTextInsertionService.swift` | `performInsertion` — ordem de `candidates`, reativação, `resolveEditableTarget` |
-| `VoiceIA/App/AppState.swift` | `captureFocusBeforeRecordingBestEffort()` e o ponto da captura (`beginDictationSession`) |
+| `CaptureAI/Input/DefaultTextInsertionService.swift` | `performInsertion` — ordem de `candidates`, reativação, `resolveEditableTarget` |
+| `CaptureAI/App/AppState.swift` | `captureFocusBeforeRecordingBestEffort()` e o ponto da captura (`beginDictationSession`) |
 
 ---
 
@@ -150,7 +150,7 @@ correção aqui que resolveu um e quebrou o outro.
 Log para acompanhar:
 
 ```bash
-rtk proxy log show --predicate 'subsystem == "dev.arley.santana.VoiceIA"' --last 20m --style compact --info
+rtk proxy log show --predicate 'subsystem == "dev.arley.santana.CaptureAI"' --last 20m --style compact --info
 ```
 
 A linha que revela a decisão é a `Alvo: ... capturado=... ao-vivo=...`, que mostra os

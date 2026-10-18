@@ -1,12 +1,12 @@
 #!/bin/bash
-# Instala a ÚNICA cópia oficial em /Applications/VoiceIA.app e reassina.
+# Instala a ÚNICA cópia oficial em /Applications/CaptureAI.app e reassina.
 # O Xcode ainda gera o .app em DerivedData (necessário para o build), mas
 # removemos esse caminho do Launch Services para o Spotlight não listar dois.
 set -euo pipefail
 
 SRC="${BUILT_PRODUCTS_DIR:?}/${FULL_PRODUCT_NAME:?}"
-DEST="/Applications/VoiceIA.app"
-ENTITLEMENTS="${SRCROOT:?}/VoiceIA/VoiceIA.entitlements"
+DEST="/Applications/CaptureAI.app"
+ENTITLEMENTS="${SRCROOT:?}/CaptureAI/CaptureAI.entitlements"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 if [[ ! -d "$SRC" ]]; then
@@ -40,4 +40,4 @@ if [[ -x "$LSREGISTER" ]]; then
   "$LSREGISTER" -f "$DEST" >/dev/null 2>&1 || true
 fi
 
-echo "VoiceIA instalado (única app registrada): $DEST (${IDENTITY})"
+echo "CaptureAI instalado (única app registrada): $DEST (${IDENTITY})"
