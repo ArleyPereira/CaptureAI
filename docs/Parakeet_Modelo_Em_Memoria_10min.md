@@ -7,6 +7,26 @@ Projeto: `/Users/arley/Developer/CaptureAI`
 
 ---
 
+> **Atualização (2026-10-18): a descarga por ociosidade foi removida.**
+>
+> Os modelos agora ficam carregados enquanto o app estiver aberto e só são
+> liberados num aperto **crítico** de memória do macOS — voltando sozinhos
+> quando ele normaliza.
+>
+> Motivos, medidos:
+> - A volta depois da descarga às vezes refaz a preparação para o Neural
+>   Engine e leva **15–30 s**; o sistema decide quando, o app não controla.
+> - Manter carregado custa **~110 MB** de memória do sistema (queda de memória
+>   *wired* na descarga). O processo fica em ~40 MB; os ~600 MB vistos logo
+>   após a carga são temporários da preparação, não residentes.
+> - O Spokenly, que usa o mesmo FluidAudio e o mesmo `.cpuAndNeuralEngine`,
+>   faz assim: aquece ao abrir (~15–20 s nos logs dele) e não descarrega o
+>   Parakeet — usado 3h30 depois do aquecimento com `already initialized`.
+>
+> O restante deste documento descreve a política antiga e fica como registro.
+
+---
+
 ## 0. Resumo em uma frase
 
 O Parakeet sai da RAM após **10 minutos** sem uso; a primeira ditagem depois disso

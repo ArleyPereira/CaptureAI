@@ -30,12 +30,17 @@ final class LocalParakeetTranscriptionService: TranscriptionService, @unchecked 
     private var ctcLoadTask: Task<CtcModels, Error>?
     private var warmTask: Task<Void, Never>?
     private var ctcWarmTask: Task<Void, Never>?
-    private var idleUnloadTask: Task<Void, Never>?
-
-    /// Após este tempo ocioso o Core ML sai da RAM (Spokenly também não fica
-    /// com ~1 GB residente o tempo todo). Dez minutos cobrem uma sessão de
-    /// trabalho contínua sem recarregar; a próxima ditagem reaquece no atalho.
-    private static let idleUnloadDelay: Duration = .seconds(600)
+    /// Observa a pressão de memória do sistema.
+    ///
+    /// Os modelos ficam carregados enquanto o app estiver aberto — como no
+    /// Spokenly, que usa o mesmo FluidAudio. A descarga por ociosidade (10 min)
+    /// custava caro: a volta às vezes refaz a preparação para o Neural Engine e
+    /// leva 15–30 s, enquanto manter carregado custa ~110 MB de memória do
+    /// sistema (medido: o processo fica em ~40 MB; os 600 MB vistos durante a
+    /// carga são temporários). Só um aperto crítico de memória os libera.
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+    /// Os modelos saíram por pressão de memória e voltam quando ela passar.
+    private var releasedForMemoryPressure = false
 
     init(settings: AppSettings, modelStore: LocalParakeetModelStore? = nil) {
         self.settings = settings
@@ -51,8 +56,6 @@ final class LocalParakeetTranscriptionService: TranscriptionService, @unchecked 
         pcmSamples: [Float]?,
         applyWordReplacements: Bool
     ) async throws -> String {
-        cancelIdleUnload()
-
         let pipelineStart = Date()
         // Um hop só: cada `MainActor.run` é uma ida e volta de scheduler no
         // caminho crítico da ditagem.
@@ -79,7 +82,6 @@ final class LocalParakeetTranscriptionService: TranscriptionService, @unchecked 
 
         guard SpeechPresenceAnalyzer.hasSpeechEnergy(in: samples) else {
             logger.notice("Áudio sem energia de fala — ignorando.")
-            scheduleIdleUnload()
             throw VoiceInputError.noSpeechDetected
         }
 
@@ -151,7 +153,6 @@ final class LocalParakeetTranscriptionService: TranscriptionService, @unchecked 
         )
 
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        scheduleIdleUnload()
         guard !trimmed.isEmpty else {
             throw VoiceInputError.emptyTranscription
         }
@@ -163,7 +164,7 @@ final class LocalParakeetTranscriptionService: TranscriptionService, @unchecked 
     /// Chamado no launch e no início da ditagem: enquanto você fala, o modelo
     /// já está quente quando soltar o atalho.
     func warmUpIfNeeded() {
-        cancelIdleUnload()
+        startObservingMemoryPressure()
         cacheLock.lock()
         let alreadyWarm = cachedManager != nil && cachedCtcModels != nil
         let tdtAlreadyWarm = cachedManager != nil
@@ -190,7 +191,6 @@ final class LocalParakeetTranscriptionService: TranscriptionService, @unchecked 
                 self.logger.notice(
                     "Parakeet aquecido em \(String(format: "%.1f", Date().timeIntervalSince(start)), privacy: .public) s."
                 )
-                self.scheduleIdleUnload()
             } catch {
                 self.logger.error(
                     "Falha ao aquecer Parakeet: \(error.localizedDescription, privacy: .public)"
@@ -234,13 +234,12 @@ final class LocalParakeetTranscriptionService: TranscriptionService, @unchecked 
         }
     }
 
-    /// Libera o Parakeet da memória (troca de modelo / política / ocioso).
+    /// Libera o Parakeet da memória (troca de modelo / política / pressão de memória).
     func unloadCachedModel() {
         warmTask?.cancel()
         warmTask = nil
         ctcWarmTask?.cancel()
         ctcWarmTask = nil
-        cancelIdleUnload()
 
         cacheLock.lock()
         let manager = cachedManager
@@ -269,22 +268,33 @@ final class LocalParakeetTranscriptionService: TranscriptionService, @unchecked 
         logger.notice("Modelo Parakeet liberado da memória.")
     }
 
-    private func scheduleIdleUnload() {
-        cancelIdleUnload()
-        idleUnloadTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: Self.idleUnloadDelay)
-            } catch {
-                return
-            }
-            guard !Task.isCancelled else { return }
-            self?.unloadCachedModel()
-        }
-    }
+    /// Libera os modelos num aperto crítico de memória e os traz de volta
+    /// quando o sistema normaliza.
+    ///
+    /// Só o nível crítico: no simples aviso a descarga devolveria ~110 MB e
+    /// traria de volta a espera de 15–30 s na próxima ditagem — troca ruim.
+    /// Ao normalizar, o reaquecimento roda em segundo plano, para a próxima
+    /// ditagem já encontrar tudo pronto.
+    private func startObservingMemoryPressure() {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard memoryPressureSource == nil else { return }
 
-    private func cancelIdleUnload() {
-        idleUnloadTask?.cancel()
-        idleUnloadTask = nil
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.critical, .normal], queue: .main)
+        source.setEventHandler { [weak self, weak source] in
+            guard let self, let event = source?.data else { return }
+            if event.contains(.critical) {
+                self.logger.notice("Pressão de memória crítica — liberando os modelos.")
+                self.releasedForMemoryPressure = true
+                self.unloadCachedModel()
+            } else if event.contains(.normal), self.releasedForMemoryPressure {
+                self.logger.notice("Memória normalizada — recarregando os modelos.")
+                self.releasedForMemoryPressure = false
+                self.warmUpIfNeeded()
+            }
+        }
+        source.resume()
+        memoryPressureSource = source
     }
 
     /// Carrega o modelo uma vez só, mesmo com aquecimento e ditagem concorrendo.
