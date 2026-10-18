@@ -15,9 +15,9 @@ final class CaptureThumbnailController {
     private var stack: [NSPanel] = []
 
     private static let margin: CGFloat = 24
-    /// Degrau da escada: cada miniatura mais antiga sobe e vai um pouco para a
-    /// direita, deixando a borda de cima e a lateral aparecendo atrás da nova.
-    private static let step = CGSize(width: 10, height: 14)
+    /// Degrau da escada: cada miniatura mais antiga sobe, deixando a borda de
+    /// cima aparecendo atrás da nova.
+    private static let step = CGSize(width: 0, height: 14)
     /// A partir daqui as mais antigas se acumulam no último degrau, para a
     /// escada não subir pela tela.
     private static let maxVisibleSteps = 5
