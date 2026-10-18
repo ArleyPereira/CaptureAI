@@ -20,9 +20,15 @@ final class CaptureThumbnailController {
     /// Degrau da escada: cada miniatura mais antiga sobe, deixando a borda de
     /// cima aparecendo atrás da nova.
     private static let step = CGSize(width: 0, height: 14)
-    /// A partir daqui as mais antigas se acumulam no último degrau, para a
-    /// escada não subir pela tela.
-    private static let maxVisibleSteps = 5
+    /// Miniaturas visíveis na escada. As mais antigas se acumulam atrás da
+    /// última e entram no contador acima da pilha, para a escada não subir
+    /// pela tela.
+    private static let visibleCount = 5
+    private static var maxVisibleSteps: Int { visibleCount - 1 }
+
+    /// "+N capturas" acima da pilha, quando há mais do que as visíveis.
+    private var counterPanel: NSPanel?
+    private let counter = StackCounterModel()
 
     func show(
         image: CGImage,
@@ -138,6 +144,7 @@ final class CaptureThumbnailController {
     /// Some com a pilha durante uma captura — ela apareceria dentro da foto —
     /// sem perder nenhuma miniatura.
     func hideAll() {
+        counterPanel?.alphaValue = 0
         hidden = stack
         for panel in hidden {
             panel.alphaValue = 0
@@ -155,6 +162,7 @@ final class CaptureThumbnailController {
         }
         hidden = []
         updateFront()
+        updateCounter()
     }
 
     /// Escondidas pela captura em andamento.
@@ -189,6 +197,7 @@ final class CaptureThumbnailController {
     /// Leva cada miniatura ao degrau da sua posição na pilha.
     private func layoutStack(skipping skipped: NSPanel? = nil) {
         updateFront()
+        updateCounter()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.25
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -205,11 +214,96 @@ final class CaptureThumbnailController {
         }
     }
 
+    /// Mostra, atualiza ou esconde o "+N capturas" acima da última miniatura
+    /// visível.
+    private func updateCounter() {
+        let hiddenCount = max(0, stack.count - Self.visibleCount)
+        counter.count = hiddenCount
+
+        guard hiddenCount > 0, let reference = stack.first else {
+            if let panel = counterPanel {
+                NSAnimationContext.runAnimationGroup { $0.duration = 0.18; panel.animator().alphaValue = 0 }
+            }
+            return
+        }
+
+        let panel = counterPanel ?? makeCounterPanel()
+        counterPanel = panel
+        guard let hosting = panel.contentView as? NSHostingView<StackCounterView> else { return }
+        let size = hosting.fittingSize
+        let top = frame(forStep: Self.maxVisibleSteps, size: reference.frame.size)
+        let target = NSRect(x: top.midX - size.width / 2, y: top.maxY + 8, width: size.width, height: size.height)
+
+        if panel.alphaValue < 0.01 {
+            panel.setFrame(target, display: true)
+        }
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(target, display: true)
+            panel.animator().alphaValue = 1
+        }
+        DispatchQueue.main.async { panel.invalidateShadow() }
+    }
+
+    private func makeCounterPanel() -> NSPanel {
+        let hosting = NSHostingView(rootView: StackCounterView(model: counter))
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: hosting.fittingSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isReleasedWhenClosed = false
+        panel.level = .statusBar
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        // Só informa: o clique atravessa para o que estiver embaixo.
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        panel.contentView = hosting
+        panel.alphaValue = 0
+        return panel
+    }
+
     /// Tamanho fixo, qualquer que seja o formato da captura: uma miniatura que
     /// muda de forma a cada vez parece outra coisa, e o canto da tela é um
     /// lugar fixo que pede um objeto de tamanho fixo. 210×150 (7:5) é a medida
     /// da miniatura do CleanShot X.
     private static let thumbnailSize = NSSize(width: 210, height: 150)
+}
+
+/// Quantas miniaturas estão escondidas atrás das visíveis.
+@Observable
+final class StackCounterModel {
+    var count = 0
+}
+
+/// Pílula grafite "+N capturas", no mesmo vidro escuro do balão de texto e da
+/// barra do editor.
+struct StackCounterView: View {
+    let model: StackCounterModel
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "square.stack.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+            Text(model.count == 1 ? "+1 captura" : "+\(model.count) capturas")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .monospacedDigit()
+                .contentTransition(.numericText())
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 24)
+        .background(Capsule().fill(Color(red: 0.13, green: 0.14, blue: 0.16).opacity(0.94)))
+        .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: model.count)
+        .fixedSize()
+    }
 }
 
 /// Se a miniatura está na frente da pilha — só ela mostra controles.
