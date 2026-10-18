@@ -57,12 +57,6 @@ final class CaptureThumbnailController {
             },
             onClose: { [weak self] in
                 if let panel = box.panel { self?.dismiss(panel) }
-            },
-            onHoverChanged: { [weak self] hovering in
-                guard let self, let panel = box.panel else { return }
-                // Uma miniatura de trás vem para a frente enquanto o mouse está
-                // nela, com os controles acessíveis; ao sair, volta ao degrau.
-                if hovering { panel.orderFrontRegardless() } else { self.restoreOrder() }
             }
         )
 
@@ -456,7 +450,6 @@ private struct CaptureThumbnailView: View {
     let onCopy: () -> Void
     let onSave: () -> Bool
     let onClose: () -> Void
-    var onHoverChanged: (Bool) -> Void = { _ in }
 
     @State private var isHovering = false
     @State private var copied = false
@@ -504,7 +497,6 @@ private struct CaptureThumbnailView: View {
         }
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.15)) { isHovering = hovering }
-            onHoverChanged(hovering)
         }
     }
 
