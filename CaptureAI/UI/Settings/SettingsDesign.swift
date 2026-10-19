@@ -527,3 +527,60 @@ struct SettingsDivider: View {
             .frame(height: 1)
     }
 }
+
+/// Abas segmentadas das telas de configuração — Área de Transferência,
+/// Modelos e o que vier depois. Um componente só, para todas terem o mesmo
+/// formato, espaçamento e comportamento.
+///
+/// Barra com fundo de campo; a aba selecionada ganha o destaque da barra
+/// lateral por dentro dela.
+struct SettingsSegmentedTabs<Item: Hashable & Identifiable>: View {
+    let items: [Item]
+    @Binding var selection: Item
+    let title: (Item) -> String
+    let icon: (Item) -> String
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(items) { item in
+                Button {
+                    selection = item
+                } label: {
+                    Label(title(item), systemImage: icon(item))
+                        .font(.system(size: 12, weight: .medium))
+                        // Altura fixa: com margem em volta do conteúdo, um ícone
+                        // mais alto (o `key.fill` da aba API) deixava a barra
+                        // 2 pt maior numa tela do que na outra.
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 29)
+                        // Com o estilo plain só o que é desenhado recebe clique;
+                        // na aba não selecionada o fundo é transparente, e o
+                        // clique só pegava em cima do texto. A forma inteira
+                        // da aba passa a contar.
+                        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(
+                    selection == item
+                        ? SettingsTheme.primaryLabel(colorScheme)
+                        : SettingsTheme.secondaryLabel(colorScheme)
+                )
+                .background {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(selection == item ? SettingsTheme.sidebarSelection(colorScheme) : .clear)
+                }
+            }
+        }
+        .padding(4)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(SettingsTheme.fieldFill(colorScheme))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(SettingsTheme.fieldStroke(colorScheme), lineWidth: SettingsTheme.hairline)
+        }
+    }
+}
