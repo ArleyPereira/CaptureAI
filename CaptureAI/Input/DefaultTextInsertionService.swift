@@ -751,11 +751,16 @@ final class DefaultTextInsertionService: TextInsertionService, @unchecked Sendab
         let pasteboard = NSPasteboard.general
         let snapshot = ClipboardSnapshot.capture(from: pasteboard)
 
+        // O texto vai sob demanda: o sistema chama o detector quando alguém o
+        // lê, e é assim que se sabe que o app alvo colou — sem esperar um tempo
+        // fixo para devolver o clipboard. A marca de transitório vai no mesmo
+        // item, então nenhum gerenciador vê a ditagem sem saber que é de passagem.
+        let readDetector = PasteReadDetector(text: text)
+        let item = NSPasteboardItem()
+        item.setData(Data(), forType: .transient)
+        item.setDataProvider(readDetector, forTypes: [.string])
         pasteboard.clearContents()
-        // A marca vem antes do texto: um gerenciador que leia o clipboard entre
-        // as duas escritas veria a ditagem sem saber que é de passagem.
-        pasteboard.setData(Data(), forType: .transient)
-        guard pasteboard.setString(text, forType: .string) else {
+        guard pasteboard.writeObjects([item]) else {
             snapshot.restore(into: pasteboard)
             return false
         }
@@ -766,12 +771,9 @@ final class DefaultTextInsertionService: TextInsertionService, @unchecked Sendab
         // coisa. É a única hipótese que sobrou para a ditagem sumir sem
         // aparecer em lugar nenhum.
         let ourChangeCount = pasteboard.changeCount
+        // Sem reler o texto: a leitura dispararia o detector e pareceria a colagem.
         logger.notice(
-            """
-            Clipboard escrito: changeCount \(ourChangeCount, privacy: .public), \
-            relido \(pasteboard.string(forType: .string)?.count ?? -1, privacy: .public) de \
-            \(text.count, privacy: .public) chars.
-            """
+            "Clipboard escrito: changeCount \(ourChangeCount, privacy: .public), \(text.count, privacy: .public) chars."
         )
 
         let pasteStart = DispatchTime.now()
@@ -780,15 +782,15 @@ final class DefaultTextInsertionService: TextInsertionService, @unchecked Sendab
         }
 
         /// Confere se o clipboard ainda é o nosso, e loga quem o alterou.
+        ///
+        /// Só pelo `changeCount`: reler o texto acionaria o detector de leitura.
         func checkClipboard(_ momento: String) {
             let now = pasteboard.changeCount
-            let readBack = pasteboard.string(forType: .string)?.count ?? -1
-            if now != ourChangeCount || readBack != text.count {
+            if now != ourChangeCount {
                 logger.error(
                     """
                     Clipboard ALTERADO \(momento, privacy: .public) (+\(elapsedMs(), privacy: .public) ms): \
-                    changeCount \(ourChangeCount, privacy: .public) → \(now, privacy: .public), \
-                    conteúdo \(readBack, privacy: .public) chars (esperado \(text.count, privacy: .public)).
+                    changeCount \(ourChangeCount, privacy: .public) → \(now, privacy: .public).
                     """
                 )
             } else {
@@ -833,6 +835,8 @@ final class DefaultTextInsertionService: TextInsertionService, @unchecked Sendab
             )
         }
 
+        // Leituras daqui em diante são a colagem; antes, eram de terceiros.
+        readDetector.arm()
         if postPasteShortcut(tap: .cghidEventTap) {
             lastMethod = .clipboardHID
         } else if postPasteShortcut(tap: .cgSessionEventTap) {
@@ -851,22 +855,30 @@ final class DefaultTextInsertionService: TextInsertionService, @unchecked Sendab
             """
         )
 
-        // Tempo para o app consumir o ⌘V antes de o `defer` devolver o
-        // clipboard. Devolver cedo demais faz o app colar o conteúdo anterior.
-        // Como a ditagem vai marcada como transitória, segurá-la um pouco mais
-        // não suja o histórico de clipboard — e nada disso é latência
-        // percebida: o texto já apareceu bem antes.
-        // Meio do settle: se o clipboard mudar aqui, mudou enquanto o app ainda
-        // tinha o ⌘V para processar.
-        try? await Task.sleep(for: .milliseconds(Self.pasteSettleMs / 2))
-        checkClipboard("no meio do settle")
-
-        try? await Task.sleep(for: .milliseconds(Self.pasteSettleMs / 2))
-        checkClipboard("ao fim do settle")
+        // Espera o app alvo ler o texto e devolve o clipboard logo depois, em
+        // vez de segurá-lo um tempo fixo: durante a espera o app fica preso em
+        // "inserindo" e o clipboard do usuário fica ocupado pela ditagem. A
+        // folga depois da leitura cobre apps que leem mais de uma vez (tipos
+        // diferentes) ao colar. Sem leitura no prazo, devolve no tempo antigo.
+        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(Self.pasteSettleMs) * 1_000_000
+        while readDetector.readAt == nil, DispatchTime.now().uptimeNanoseconds < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        if let readAt = readDetector.readAt {
+            let readMs = Int(Double(readAt.uptimeNanoseconds - pasteStart.uptimeNanoseconds) / 1_000_000)
+            logger.notice("Texto lido pelo app alvo em +\(readMs, privacy: .public) ms.")
+            try? await Task.sleep(for: .milliseconds(Self.postReadGraceMs))
+        } else {
+            logger.notice("Nenhuma leitura em \(Self.pasteSettleMs, privacy: .public) ms — devolvendo pelo prazo.")
+        }
+        checkClipboard("antes de devolver")
         return true
     }
 
-    /// Quanto tempo a ditagem fica no clipboard depois do ⌘V.
+    /// Folga entre a leitura do texto pelo app alvo e a devolução do clipboard.
+    private static let postReadGraceMs = 250
+
+    /// Prazo máximo da ditagem no clipboard depois do ⌘V, se ninguém a ler.
     private static let pasteSettleMs = 900
 
     /// Ativa o app alvo e aguarda ele virar frontmost de fato.
@@ -959,5 +971,27 @@ final class DefaultTextInsertionService: TextInsertionService, @unchecked Sendab
         let status = AXUIElementCopyAttributeValue(element, attribute, &value)
         guard status == .success, let value else { return nil }
         return value as? String
+    }
+}
+
+/// Entrega o texto da ditagem ao clipboard sob demanda e anota quando ele foi
+/// lido depois do ⌘V — o sinal de que o app alvo colou.
+final class PasteReadDetector: NSObject, NSPasteboardItemDataProvider {
+    private let text: String
+    private var isArmed = false
+    private(set) var readAt: DispatchTime?
+
+    init(text: String) {
+        self.text = text
+    }
+
+    /// A partir daqui, uma leitura conta como a colagem.
+    func arm() { isArmed = true }
+
+    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        // O texto é sempre entregue — a quem quer que peça. Só a marcação do
+        // momento depende de o ⌘V já ter sido enviado.
+        item.setString(text, forType: type)
+        if isArmed, readAt == nil { readAt = .now() }
     }
 }
