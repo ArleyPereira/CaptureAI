@@ -371,40 +371,12 @@ struct SettingsView: View {
     }
 
     private var modelsPanePicker: some View {
-        HStack(spacing: 8) {
-            ForEach(ModelsPane.allCases) { pane in
-                let isSelected = viewModel.selectedModelsPane == pane
-                Button {
-                    viewModel.selectedModelsPane = pane
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: pane.icon)
-                            .font(.system(size: 12, weight: .semibold))
-                        Text(pane.title)
-                            .font(.system(size: 12.5, weight: .semibold))
-                    }
-                    .foregroundStyle(.primary.opacity(isSelected ? 0.95 : 0.55))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background {
-                        if isSelected {
-                            Capsule()
-                                .fill(SettingsTheme.sidebarSelection(colorScheme))
-                                .overlay {
-                                    Capsule().strokeBorder(SettingsTheme.cardStroke(colorScheme), lineWidth: SettingsTheme.hairline)
-                                }
-                        } else {
-                            Capsule()
-                                .fill(SettingsTheme.cardFill(colorScheme))
-                                .overlay {
-                                    Capsule().strokeBorder(SettingsTheme.divider(colorScheme), lineWidth: SettingsTheme.hairline)
-                                }
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-        }
+        SettingsSegmentedTabs(
+            items: ModelsPane.allCases,
+            selection: $viewModel.selectedModelsPane,
+            title: \.title,
+            icon: \.icon
+        )
     }
 
     private var apiPane: some View {

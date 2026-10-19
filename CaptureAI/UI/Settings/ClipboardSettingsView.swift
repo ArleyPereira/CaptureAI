@@ -70,42 +70,12 @@ struct ClipboardSettingsView: View {
     // MARK: - Seletor de seção
 
     private var sectionPicker: some View {
-        HStack(spacing: 6) {
-            ForEach(Section.allCases) { item in
-                Button {
-                    section = item
-                } label: {
-                    Label(item.title, systemImage: item.icon)
-                        .font(.system(size: 12, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        // Com o estilo plain só o que é desenhado recebe clique;
-                        // na aba não selecionada o fundo é transparente, e o
-                        // clique só pegava em cima do texto. A forma inteira
-                        // da aba passa a contar.
-                        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(
-                    section == item
-                        ? SettingsTheme.primaryLabel(colorScheme)
-                        : SettingsTheme.secondaryLabel(colorScheme)
-                )
-                .background {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(section == item ? SettingsTheme.sidebarSelection(colorScheme) : .clear)
-                }
-            }
-        }
-        .padding(4)
-        .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(SettingsTheme.fieldFill(colorScheme))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(SettingsTheme.fieldStroke(colorScheme), lineWidth: SettingsTheme.hairline)
-        }
+        SettingsSegmentedTabs(
+            items: Section.allCases,
+            selection: $section,
+            title: \.title,
+            icon: \.icon
+        )
     }
 
     // MARK: - Texto
