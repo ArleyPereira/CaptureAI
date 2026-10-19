@@ -70,13 +70,22 @@ struct CapturableWindow: Equatable {
             kCGNullWindowID
         ) as? [[String: Any]] else { return [] }
 
+        // Camadas abaixo do Dock: além da comum (0), entram as flutuantes e
+        // os painéis modais. O macOS sobe uma modal para a camada 8 enquanto
+        // o app dono está em foco — a de login do Teams sumia da lista e o
+        // clique caía na janela principal, logo atrás.
+        //
         // As janelas do próprio CaptureAI entram como as de qualquer app — a
-        // de configurações é uma janela como outra. O editor não corre risco
-        // de se destacar: a lista é montada antes de ele abrir, e a miniatura
-        // flutuante fica acima da camada 0, fora do filtro.
+        // de configurações é uma janela como outra —, mas só na camada 0: o
+        // seletor de cor e a miniatura flutuante ficam de fora. O editor não
+        // corre risco de se destacar: a lista é montada antes de ele abrir.
+        let dockLayer = Int(CGWindowLevelForKey(.dockWindow))
+        let ownPID = Int(ProcessInfo.processInfo.processIdentifier)
         return list.compactMap { info in
             guard
-                (info[kCGWindowLayer as String] as? Int) == 0,
+                let layer = info[kCGWindowLayer as String] as? Int,
+                (0..<dockLayer).contains(layer),
+                layer == 0 || (info[kCGWindowOwnerPID as String] as? Int) != ownPID,
                 (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.01,
                 let number = info[kCGWindowNumber as String] as? CGWindowID,
                 let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
