@@ -8,8 +8,14 @@ import Foundation
 /// e escurecer a tela antes da hora atropelaria a escolha. Com o principal
 /// segurado, W abre a captura de janela e F a de tela inteira; aí o soltar não
 /// faz mais nada. O macOS não registra acorde de duas teclas comuns, então W
-/// e F são registradas ao pressionar e removidas ao soltar: fora desse
+/// e F só são interceptadas enquanto o principal está segurado: fora desse
 /// instante voltam a digitar normalmente em qualquer app.
+///
+/// A interceptação é um *event tap* ativo, ligado ao pressionar e desligado ao
+/// soltar. Atalho Carbon de letra sem modificador não dispara nas versões
+/// atuais do macOS: o W ia parar no campo em foco e o editor abria no modo
+/// área. O tap depende da permissão de Acessibilidade, que o ditado já exige;
+/// sem ela, sobra o registro Carbon como tentativa.
 ///
 /// O handler Carbon fica no dispatcher global e recebe os eventos de todos os
 /// atalhos do app, por isso confere a identidade de cada um e devolve
@@ -30,6 +36,8 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
 
     private var hotKeyRef: EventHotKeyRef?
     private var modeKeyRefs: [EventHotKeyRef] = []
+    private var modeKeyTap: CFMachPort?
+    private var modeKeyTapSource: CFRunLoopSource?
     private var handlerRef: EventHandlerRef?
     private var keyCode: UInt32 = CaptureHotkey.default.keyCode
     private var modifiers: UInt32 = CaptureHotkey.default.modifiers
@@ -91,7 +99,8 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
     private func registerModeKey() {
         lock.lock()
         defer { lock.unlock() }
-        guard modeKeyRefs.isEmpty else { return }
+        guard modeKeyTap == nil, modeKeyRefs.isEmpty else { return }
+        if installModeKeyTap() { return }
         for (key, id) in [(kVK_ANSI_W, windowKeyID), (kVK_ANSI_F, fullScreenKeyID)] {
             var ref: EventHotKeyRef?
             if RegisterEventHotKey(UInt32(key), 0, id, GetEventDispatcherTarget(), 0, &ref) == noErr, let ref {
@@ -105,6 +114,66 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
         defer { lock.unlock() }
         modeKeyRefs.forEach { UnregisterEventHotKey($0) }
         modeKeyRefs.removeAll()
+        if let modeKeyTap {
+            CGEvent.tapEnable(tap: modeKeyTap, enable: false)
+            if let modeKeyTapSource {
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), modeKeyTapSource, .commonModes)
+            }
+            CFMachPortInvalidate(modeKeyTap)
+        }
+        modeKeyTap = nil
+        modeKeyTapSource = nil
+    }
+
+    /// Liga o tap que engole W e F. Roda no laço principal, o mesmo dos
+    /// eventos Carbon, então `handle` nunca é chamado em paralelo.
+    private func installModeKeyTap() -> Bool {
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue) | CGEventMask(1 << CGEventType.keyUp.rawValue)
+        let userData = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userData in
+                guard let userData else { return Unmanaged.passUnretained(event) }
+                let service = Unmanaged<CaptureHotkeyService>.fromOpaque(userData).takeUnretainedValue()
+                return service.handleTapped(type: type, event: event)
+            },
+            userInfo: userData
+        ) else { return false }
+
+        let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        modeKeyTap = tap
+        modeKeyTapSource = source
+        return true
+    }
+
+    private func handleTapped(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let modeKeyTap { CGEvent.tapEnable(tap: modeKeyTap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+
+        // Com ⌘, ⌃ ou ⌥ é outro atalho (⌘W fecha janela): passa adiante.
+        let blocking: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate]
+        guard event.flags.intersection(blocking).isEmpty else { return Unmanaged.passUnretained(event) }
+
+        let id: UInt32
+        switch Int(event.getIntegerValueField(.keyboardEventKeycode)) {
+        case kVK_ANSI_W: id = windowKeyID.id
+        case kVK_ANSI_F: id = fullScreenKeyID.id
+        default: return Unmanaged.passUnretained(event)
+        }
+
+        // Engole também a repetição e o soltar: nada do acorde chega ao app
+        // em foco.
+        if type == .keyDown, event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+            _ = handle(id: id, pressed: true)
+        }
+        return nil
     }
 
     // MARK: - Eventos
