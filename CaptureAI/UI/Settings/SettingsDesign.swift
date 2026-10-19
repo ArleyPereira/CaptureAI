@@ -550,8 +550,11 @@ struct SettingsSegmentedTabs<Item: Hashable & Identifiable>: View {
                 } label: {
                     Label(title(item), systemImage: icon(item))
                         .font(.system(size: 12, weight: .medium))
+                        // Altura fixa: com margem em volta do conteúdo, um ícone
+                        // mais alto (o `key.fill` da aba API) deixava a barra
+                        // 2 pt maior numa tela do que na outra.
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
+                        .frame(height: 29)
                         // Com o estilo plain só o que é desenhado recebe clique;
                         // na aba não selecionada o fundo é transparente, e o
                         // clique só pegava em cima do texto. A forma inteira
