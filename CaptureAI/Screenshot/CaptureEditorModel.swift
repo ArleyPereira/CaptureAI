@@ -75,17 +75,15 @@ struct CapturableWindow: Equatable {
         // o app dono está em foco — a de login do Teams sumia da lista e o
         // clique caía na janela principal, logo atrás.
         //
-        // As janelas do próprio CaptureAI entram como as de qualquer app — a
-        // de configurações é uma janela como outra —, mas só na camada 0: o
-        // seletor de cor e a miniatura flutuante ficam de fora. O editor não
-        // corre risco de se destacar: a lista é montada antes de ele abrir.
+        // As janelas do próprio CaptureAI entram como as de qualquer app,
+        // inclusive a barra flutuante de gravação. A miniatura fica acima do
+        // Dock, fora do filtro, e o editor e o seletor de cor só abrem depois
+        // de a lista ser montada.
         let dockLayer = Int(CGWindowLevelForKey(.dockWindow))
-        let ownPID = Int(ProcessInfo.processInfo.processIdentifier)
         return list.compactMap { info in
             guard
                 let layer = info[kCGWindowLayer as String] as? Int,
                 (0..<dockLayer).contains(layer),
-                layer == 0 || (info[kCGWindowOwnerPID as String] as? Int) != ownPID,
                 (info[kCGWindowAlpha as String] as? Double ?? 1) > 0.01,
                 let number = info[kCGWindowNumber as String] as? CGWindowID,
                 let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
