@@ -9,10 +9,20 @@ enum AnnotationTool: String, CaseIterable, Identifiable {
     case rectangle
     case ellipse
     case arrow
+    case pen
     case marker
     case bubble
 
     var id: String { rawValue }
+
+    /// Usa a espessura escolhida na barra. O marca-texto cobre a área
+    /// arrastada e o balão tem desenho próprio: espessura não faz sentido.
+    var usesLineWidth: Bool {
+        switch self {
+        case .rectangle, .ellipse, .arrow, .pen: return true
+        case .adjust, .marker, .bubble: return false
+        }
+    }
 
     var icon: String {
         switch self {
@@ -20,6 +30,7 @@ enum AnnotationTool: String, CaseIterable, Identifiable {
         case .rectangle: return "rectangle"
         case .ellipse: return "circle"
         case .arrow: return "arrow.up.right"
+        case .pen: return "paintbrush.pointed"
         case .marker: return "highlighter"
         case .bubble: return "text.bubble"
         }
@@ -31,8 +42,35 @@ enum AnnotationTool: String, CaseIterable, Identifiable {
         case .rectangle: return "Retângulo"
         case .ellipse: return "Círculo"
         case .arrow: return "Seta"
+        case .pen: return "Pincel"
         case .marker: return "Marca-texto"
         case .bubble: return "Balão de texto"
+        }
+    }
+}
+
+/// Espessuras do traço, da barra do editor.
+enum StrokeWidth: CGFloat, CaseIterable, Identifiable {
+    case thin = 3
+    case medium = 8
+    case thick = 18
+
+    var id: CGFloat { rawValue }
+
+    /// Diâmetro do ponto que representa a espessura na barra.
+    var dotSize: CGFloat {
+        switch self {
+        case .thin: return 4
+        case .medium: return 7
+        case .thick: return 11
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .thin: return "Traço fino"
+        case .medium: return "Traço médio"
+        case .thick: return "Traço grosso"
         }
     }
 }
@@ -108,6 +146,9 @@ struct Annotation: Identifiable {
     var color: NSColor
     var start: CGPoint
     var end: CGPoint
+    var lineWidth: CGFloat = StrokeWidth.thin.rawValue
+    /// Trajeto do pincel, na ordem em que foi desenhado.
+    var points: [CGPoint] = []
     /// Conteúdo do balão de texto. No balão, `start` e `end` coincidem: são a
     /// ponta para onde ele aponta.
     var text = ""
@@ -125,6 +166,8 @@ struct Annotation: Identifiable {
     var isNegligible: Bool {
         if tool == .bubble { return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         if tool == .arrow { return hypot(end.x - start.x, end.y - start.y) < 6 }
+        // Um clique com o pincel deixa um ponto, e isso já é uma marca.
+        if tool == .pen { return points.isEmpty }
         return rect.width < 4 || rect.height < 4
     }
 
@@ -132,6 +175,7 @@ struct Annotation: Identifiable {
         var copy = self
         copy.start = CGPoint(x: start.x + dx, y: start.y + dy)
         copy.end = CGPoint(x: end.x + dx, y: end.y + dy)
+        copy.points = points.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }
         return copy
     }
 }
@@ -160,7 +204,7 @@ enum AnnotationRenderer {
             x: min(start.x, end.x), y: min(start.y, end.y),
             width: abs(end.x - start.x), height: abs(end.y - start.y)
         )
-        let lineWidth = 3 * scale
+        let lineWidth = annotation.lineWidth * scale
         let color = annotation.color.cgColor
 
         context.saveGState()
@@ -186,6 +230,9 @@ enum AnnotationRenderer {
             context.setStrokeColor(color)
             context.setLineWidth(lineWidth)
             context.strokeEllipse(in: rect.insetBy(dx: lineWidth / 2, dy: lineWidth / 2))
+
+        case .pen:
+            drawPen(annotation.points.map(map), color: color, lineWidth: lineWidth, in: context)
 
         case .marker:
             context.setFillColor(annotation.color.withAlphaComponent(0.35).cgColor)
@@ -224,6 +271,30 @@ enum AnnotationRenderer {
             context.fillPath()
         }
     }
+
+    /// Traço livre suavizado: curvas pelos pontos médios entre as amostras,
+    /// para o trajeto do mouse não sair serrilhado.
+    private static func drawPen(_ points: [CGPoint], color: CGColor, lineWidth: CGFloat, in context: CGContext) {
+        guard let first = points.first else { return }
+        context.setStrokeColor(color)
+        context.setLineWidth(lineWidth)
+        context.move(to: first)
+        if points.count == 1 {
+            // Clique sem arrasto: o traço de comprimento zero com ponta
+            // redonda vira um ponto.
+            context.addLine(to: first)
+        } else {
+            for index in 1..<points.count {
+                let previous = points[index - 1]
+                let current = points[index]
+                let mid = CGPoint(x: (previous.x + current.x) / 2, y: (previous.y + current.y) / 2)
+                context.addQuadCurve(to: mid, control: previous)
+            }
+            context.addLine(to: points[points.count - 1])
+        }
+        context.strokePath()
+    }
+
     // MARK: - Balão de texto
 
     /// Geometria de um balão, no espaço do contexto onde ele vai ser desenhado.
@@ -384,6 +455,7 @@ enum AnnotationRenderer {
 final class CaptureEditorModel {
     var tool: AnnotationTool = .adjust
     var color: NSColor = .systemRed
+    var lineWidth: StrokeWidth = .thin
     var annotations: [Annotation] = []
     var mode: CaptureMode = .area
     /// Janelas visíveis no instante do atalho, para o modo janela.
@@ -416,6 +488,13 @@ final class CaptureEditorModel {
         // Escolher cor é a intenção de desenhar: sair do modo ajuste poupa um
         // clique a mais na ferramenta.
         if tool == .adjust { tool = .rectangle }
+        onChange()
+    }
+
+    func select(_ width: StrokeWidth) {
+        lineWidth = width
+        // Como na cor: escolher espessura é intenção de desenhar com traço.
+        if !tool.usesLineWidth { tool = .pen }
         onChange()
     }
 
@@ -473,6 +552,18 @@ struct CaptureToolbar: View {
             }
             .buttonStyle(.plain)
             .help("Cor")
+
+            HStack(spacing: 0) {
+                ForEach(StrokeWidth.allCases) { width in
+                    StrokeWidthButton(
+                        width: width,
+                        isActive: model.lineWidth == width,
+                        isEnabled: model.tool.usesLineWidth || model.tool == .adjust
+                    ) {
+                        model.select(width)
+                    }
+                }
+            }
 
             separator
 
@@ -534,6 +625,39 @@ struct CaptureToolbar: View {
             .fill(.white.opacity(0.14))
             .frame(width: 1, height: 18)
             .padding(.horizontal, 5)
+    }
+}
+
+/// Um tamanho de traço, mostrado como um ponto do diâmetro correspondente.
+private struct StrokeWidthButton: View {
+    let width: StrokeWidth
+    let isActive: Bool
+    let isEnabled: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Circle()
+                .fill(isActive ? SettingsTheme.accent : Color.white.opacity(isEnabled ? 0.88 : 0.35))
+                .frame(width: width.dotSize, height: width.dotSize)
+                .frame(width: 24, height: 30)
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(
+                            isActive
+                                ? SettingsTheme.accent.opacity(0.2)
+                                : Color.white.opacity(isHovering ? 0.1 : 0)
+                        )
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(width.help)
+        .onHover { isHovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovering)
+        .animation(.easeOut(duration: 0.12), value: isActive)
     }
 }
 
