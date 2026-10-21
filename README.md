@@ -7,6 +7,10 @@ por atalho global, em qualquer app, sem trocar de janela.
 O ditado pode rodar **inteiramente no seu Mac**, sem enviar áudio para lugar
 nenhum, e o histórico e as capturas ficam só no seu disco.
 
+<p align="center">
+  <img src="docs/images/captureai-visao-geral.png" alt="CaptureAI: ditado, print e histórico num app só" width="540">
+</p>
+
 ---
 
 ## O que ele faz
