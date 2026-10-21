@@ -3,6 +3,7 @@ import CoreGraphics
 import Foundation
 import Observation
 import OSLog
+import UniformTypeIdentifiers
 
 /// Uma captura de tela em disco.
 ///
@@ -176,12 +177,50 @@ final class ScreenshotStore {
         NSWorkspace.shared.open(directoryURL)
     }
 
-    /// Coloca a imagem na área de transferência.
+    /// Coloca a captura na área de transferência como o próprio arquivo.
+    ///
+    /// Vai a URL do arquivo e o PNG dele, sem reprocessar. Com a URL, colar
+    /// no Finder copia o arquivo original, com nome e formato; apps que
+    /// querem a imagem leem o PNG. Um `NSImage` aqui seria serializado como
+    /// TIFF, e o Finder colaria um `.tiff`.
     func copyToPasteboard(_ entry: ScreenshotEntry) {
-        guard let image = NSImage(contentsOf: entry.url) else { return }
+        guard let data = try? Data(contentsOf: entry.url) else { return }
+        let item = NSPasteboardItem()
+        item.setString(entry.url.absoluteString, forType: .fileURL)
+        item.setData(data, forType: Self.pasteboardType(for: entry.url))
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.writeObjects([image])
+        pasteboard.writeObjects([item])
+    }
+
+    private static func pasteboardType(for url: URL) -> NSPasteboard.PasteboardType {
+        switch url.pathExtension.lowercased() {
+        case "png": return .png
+        case "tiff": return .tiff
+        case "pdf": return .pdf
+        default: return NSPasteboard.PasteboardType(UTType(filenameExtension: url.pathExtension)?.identifier ?? "public.image")
+        }
+    }
+
+    /// Coloca uma captura recém-feita na área de transferência, em PNG.
+    ///
+    /// O PNG leva a densidade da tela (144 dpi numa Retina): apps que a
+    /// respeitam colam a imagem no tamanho em pontos, e não no dobro. O
+    /// sistema ainda oferece TIFF a quem só aceita TIFF.
+    static func copyToPasteboard(_ image: CGImage, scale: CGFloat) {
+        guard let data = png(image, scale: scale) else { return }
+        let item = NSPasteboardItem()
+        item.setData(data, forType: .png)
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects([item])
+    }
+
+    /// PNG com a densidade da tela gravada no arquivo.
+    static func png(_ image: CGImage, scale: CGFloat) -> Data? {
+        let rep = NSBitmapImageRep(cgImage: image)
+        rep.size = NSSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
+        return rep.representation(using: .png, properties: [:])
     }
 }
 
