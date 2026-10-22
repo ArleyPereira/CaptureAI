@@ -181,6 +181,7 @@ final class AppState {
                     self?.pauseHotkeyMonitoringForCapture()
                 } else {
                     self?.reloadDictationHotkey()
+                    self?.reloadCaptureHotkey()
                 }
             },
             onFieldDictationRequested: { [weak self] rawTranscription, completion in
@@ -334,9 +335,14 @@ final class AppState {
         }
     }
 
-    /// Pausa o atalho global enquanto a UI captura um novo combo.
+    /// Pausa os atalhos globais enquanto a UI grava um novo combo.
+    ///
+    /// Os dois: um atalho registrado engole a tecla antes de ela chegar à
+    /// janela de configurações, então gravar de novo o atalho atual de
+    /// qualquer um deles seria impossível.
     func pauseHotkeyMonitoringForCapture() {
         stopHotkeyMonitoring()
+        captureHotkeyService.stop()
     }
 
     /// Atalho: inicia se idle; se já gravando/pausado, envia para transcrição.

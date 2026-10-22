@@ -70,6 +70,9 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
         self.modifiers = modifiers
         unregisterModeKey()
         unregisterMainHotKey()
+        // Pausado no meio de um aperto, o soltar nunca chegou.
+        isMainHeld = false
+        chordConsumed = false
         if handlerRef == nil { installHandler() }
         registerMainHotKey()
     }
@@ -103,7 +106,9 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
         if installModeKeyTap() { return }
         for (key, id) in [(kVK_ANSI_W, windowKeyID), (kVK_ANSI_F, fullScreenKeyID)] {
             var ref: EventHotKeyRef?
-            if RegisterEventHotKey(UInt32(key), 0, id, GetEventDispatcherTarget(), 0, &ref) == noErr, let ref {
+            // Com os modificadores do principal: eles continuam apertados
+            // durante o acorde (⌘⇧2 segurado + W).
+            if RegisterEventHotKey(UInt32(key), modifiers, id, GetEventDispatcherTarget(), 0, &ref) == noErr, let ref {
                 modeKeyRefs.append(ref)
             }
         }
@@ -157,8 +162,10 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
             return Unmanaged.passUnretained(event)
         }
 
-        // Com ⌘, ⌃ ou ⌥ é outro atalho (⌘W fecha janela): passa adiante.
-        let blocking: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate]
+        // Com ⌘, ⌃ ou ⌥ além dos do próprio atalho é outro atalho (⌘W fecha
+        // janela): passa adiante. Os do atalho estão apertados por definição.
+        let blocking = CGEventFlags([.maskCommand, .maskControl, .maskAlternate])
+            .subtracting(Self.eventFlags(fromCarbon: modifiers))
         guard event.flags.intersection(blocking).isEmpty else { return Unmanaged.passUnretained(event) }
 
         let id: UInt32
@@ -217,6 +224,15 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
 
         guard status == noErr else { return }
         handlerRef = handler
+    }
+
+    private static func eventFlags(fromCarbon carbon: UInt32) -> CGEventFlags {
+        var flags: CGEventFlags = []
+        if carbon & UInt32(cmdKey) != 0 { flags.insert(.maskCommand) }
+        if carbon & UInt32(controlKey) != 0 { flags.insert(.maskControl) }
+        if carbon & UInt32(optionKey) != 0 { flags.insert(.maskAlternate) }
+        if carbon & UInt32(shiftKey) != 0 { flags.insert(.maskShift) }
+        return flags
     }
 
     private func handle(id: UInt32, pressed: Bool) -> OSStatus {

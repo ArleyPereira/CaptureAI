@@ -15,3 +15,9 @@ enum HotkeyConfiguration {
     /// Instrução curta de uso.
     static let holdInstruction = DictationHotkey.default.holdInstruction
 }
+
+/// Os atalhos globais que podem ser configurados.
+enum HotkeyTarget: Equatable, Sendable {
+    case dictation
+    case capture
+}

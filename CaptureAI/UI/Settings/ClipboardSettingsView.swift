@@ -211,19 +211,6 @@ struct ClipboardSettingsView: View {
             SettingsCard(title: "Captura de tela") {
                 VStack(spacing: 12) {
                     SettingsRow(
-                        title: "Atalho",
-                        description: "Solte para selecionar uma área. Segure e aperte W para uma janela, ou F para a tela inteira."
-                    ) {
-                        HStack(spacing: 4) {
-                            ForEach(Array(viewModel.captureHotkey.keyParts.enumerated()), id: \.offset) { _, part in
-                                HotkeyKeyCap(symbol: part.symbol, title: part.title)
-                            }
-                        }
-                    }
-
-                    SettingsDivider()
-
-                    SettingsRow(
                         title: "Pasta das capturas",
                         description: viewModel.screenshotDirectoryLabel
                     ) {

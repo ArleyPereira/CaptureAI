@@ -127,11 +127,17 @@ final class SettingsViewModel {
     /// Aviso quando o macOS pede aprovação ou o app não está em Aplicativos.
     private(set) var launchAtLoginHint: String?
 
-    /// Escutando teclas para definir um novo atalho.
-    var isCapturingHotkey = false
+    /// Qual atalho está sendo gravado agora, se algum.
+    private(set) var recordingHotkey: HotkeyTarget?
 
-    /// Dica durante/após a captura do atalho.
+    /// Escutando teclas para definir um novo atalho.
+    var isCapturingHotkey: Bool { recordingHotkey != nil }
+
+    /// Dica durante/após a gravação do atalho.
     var hotkeyCaptureHint: String?
+
+    /// A que atalho a dica se refere — só o cartão dele a mostra.
+    private(set) var hotkeyHintTarget: HotkeyTarget?
 
     /// Monitor local de teclado durante a captura.
     private var hotkeyCaptureMonitor: Any?
@@ -276,10 +282,15 @@ final class SettingsViewModel {
     }
 
     /// Inicia a escuta do novo atalho (Esc cancela).
-    func beginHotkeyCapture() {
-        guard !isCapturingHotkey else { return }
-        isCapturingHotkey = true
-        hotkeyCaptureHint = "Pressione o novo atalho… (Esc cancela)"
+    ///
+    /// Os dois atalhos globais ficam desligados enquanto isso: um atalho
+    /// registrado engole a tecla antes de ela chegar à janela, e o atual nunca
+    /// poderia ser regravado.
+    func beginHotkeyCapture(_ target: HotkeyTarget = .dictation) {
+        if recordingHotkey != nil { endHotkeyCaptureSession(hint: nil) }
+        recordingHotkey = target
+        hotkeyHintTarget = target
+        hotkeyCaptureHint = nil
         onHotkeyCaptureSessionChanged(true)
 
         hotkeyCaptureMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -298,22 +309,63 @@ final class SettingsViewModel {
         hotkeyCaptureHint = nil
     }
 
+    /// Volta um atalho ao padrão de fábrica.
+    func resetHotkey(_ target: HotkeyTarget) {
+        cancelHotkeyCapture()
+        hotkeyHintTarget = target
+        switch target {
+        case .dictation:
+            guard settings.dictationHotkey != .default else { return }
+            settings.dictationHotkey = .default
+            onDictationHotkeyChanged()
+            hotkeyCaptureHint = "Atalho restaurado para \(DictationHotkey.default.displayName)."
+        case .capture:
+            guard settings.captureHotkey != .default else { return }
+            captureHotkey = .default
+            hotkeyCaptureHint = "Atalho restaurado para \(CaptureHotkey.default.displayName)."
+        }
+    }
+
     private func handleHotkeyCaptureEvent(_ event: NSEvent) -> NSEvent? {
-        guard isCapturingHotkey else { return event }
+        guard let target = recordingHotkey else { return event }
 
         if event.keyCode == 53 { // Esc
             cancelHotkeyCapture()
             return nil
         }
 
-        guard let hotkey = DictationHotkey.from(event: event) else {
-            hotkeyCaptureHint = "Use um modificador (⌘ ⌥ ⇧ ⌃) + uma tecla."
-            return nil
-        }
+        switch target {
+        case .dictation:
+            guard let hotkey = DictationHotkey.from(event: event) else {
+                hotkeyCaptureHint = "Use um modificador (⌘ ⌥ ⇧ ⌃) + uma tecla."
+                return nil
+            }
+            if hotkey.keyCode == settings.captureHotkey.keyCode, hotkey.modifiers == settings.captureHotkey.modifiers {
+                hotkeyCaptureHint = "Esse já é o atalho da captura de tela."
+                return nil
+            }
+            settings.dictationHotkey = hotkey
+            onDictationHotkeyChanged()
+            endHotkeyCaptureSession(hint: "Atalho atualizado para \(hotkey.displayName).")
 
-        settings.dictationHotkey = hotkey
-        onDictationHotkeyChanged()
-        endHotkeyCaptureSession(hint: "Atalho atualizado para \(hotkey.displayName).")
+        case .capture:
+            guard let hotkey = CaptureHotkey.from(event: event) else {
+                hotkeyCaptureHint = "Use uma tecla de função (F1–F20) ou um modificador (⌘ ⌥ ⇧ ⌃) + uma tecla."
+                return nil
+            }
+            if hotkey.keyCode == settings.dictationHotkey.keyCode, hotkey.modifiers == settings.dictationHotkey.modifiers {
+                hotkeyCaptureHint = "Esse já é o atalho do ditado."
+                return nil
+            }
+            // W e F completam o atalho segurado: como tecla principal, o
+            // acorde de janela ou de tela inteira nunca aconteceria.
+            if hotkey.usesChordKey {
+                hotkeyCaptureHint = "W e F ficam reservadas para janela e tela inteira. Escolha outra tecla."
+                return nil
+            }
+            captureHotkey = hotkey
+            endHotkeyCaptureSession(hint: "Atalho atualizado para \(hotkey.displayName).")
+        }
         return nil
     }
 
@@ -322,7 +374,7 @@ final class SettingsViewModel {
             NSEvent.removeMonitor(hotkeyCaptureMonitor)
             self.hotkeyCaptureMonitor = nil
         }
-        isCapturingHotkey = false
+        recordingHotkey = nil
         hotkeyCaptureHint = hint
         onHotkeyCaptureSessionChanged(false)
     }
