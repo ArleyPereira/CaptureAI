@@ -57,13 +57,10 @@ final class ScreenCaptureCoordinator {
     ///
     /// Copiar não grava arquivo nem entra no histórico de Imagens — é para
     /// colar agora. Quem quer guardar usa Salvar, nos dois modos de captura.
-    /// Sem o tamanho em pontos, a imagem colada sairia com o dobro do tamanho
-    /// em telas Retina.
+    /// Vai em PNG com a densidade da tela: sem ela, a imagem colada sairia
+    /// com o dobro do tamanho em telas Retina.
     private func copy(_ image: CGImage, scale: CGFloat) {
-        let size = NSSize(width: CGFloat(image.width) / scale, height: CGFloat(image.height) / scale)
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([NSImage(cgImage: image, size: size)])
+        ScreenshotStore.copyToPasteboard(image, scale: scale)
     }
 
     @discardableResult
