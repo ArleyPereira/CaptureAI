@@ -4,6 +4,7 @@ import SwiftUI
 /// Abas da janela de configurações.
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general
+    case shortcuts
     case appearance
     case models
     case transcription
@@ -16,6 +17,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .general: return "Geral"
+        case .shortcuts: return "Atalhos"
         case .appearance: return "Aparência"
         case .models: return "Modelos"
         case .transcription: return "Transcrição"
@@ -28,6 +30,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: return "slider.horizontal.3"
+        case .shortcuts: return "command"
         case .appearance: return "paintpalette.fill"
         case .models: return "sparkles"
         case .transcription: return "waveform"
@@ -39,7 +42,8 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .general: return "Início automático, atalho e permissões do macOS."
+        case .general: return "Início automático e permissões do macOS."
+        case .shortcuts: return "Todos os atalhos do CaptureAI num lugar só."
         case .appearance: return "Tema da interface e visual da barra de gravação."
         case .models: return "API OpenAI e modelo local."
         case .transcription: return "Idioma do ditado e substituição de palavras."
@@ -182,6 +186,8 @@ struct SettingsView: View {
                 switch selectedTab {
                 case .general:
                     generalTab
+                case .shortcuts:
+                    ShortcutsSettingsView(viewModel: viewModel)
                 case .appearance:
                     appearanceTab
                 case .models:
@@ -231,61 +237,6 @@ struct SettingsView: View {
                             .font(.system(size: 11.5))
                             .foregroundStyle(Color(red: 1.00, green: 0.70, blue: 0.35))
                             .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-
-            SettingsCard(
-                title: "Atalho de ditado",
-                subtitle: viewModel.isCapturingHotkey
-                    ? (viewModel.hotkeyCaptureHint ?? "Pressione o novo atalho…")
-                    : viewModel.dictationHotkey.holdInstruction
-            ) {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        if viewModel.isCapturingHotkey {
-                            Text("Aguardando teclas…")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(SettingsTheme.accent)
-                        } else {
-                            ForEach(Array(viewModel.dictationHotkey.keyParts.enumerated()), id: \.element.id) { index, part in
-                                if index > 0 {
-                                    Text("+")
-                                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(SettingsTheme.tertiaryLabel(colorScheme))
-                                }
-                                HotkeyKeyCap(symbol: part.symbol, title: part.title)
-                            }
-                        }
-
-                        Spacer(minLength: 8)
-
-                        if viewModel.isCapturingHotkey {
-                            Button("Cancelar") {
-                                viewModel.cancelHotkeyCapture()
-                            }
-                            .buttonStyle(GhostButtonStyle())
-                        } else {
-                            Button("Alterar") {
-                                viewModel.beginHotkeyCapture()
-                            }
-                            .buttonStyle(GhostButtonStyle())
-                        }
-                    }
-
-                    if !viewModel.isCapturingHotkey, let hint = viewModel.hotkeyCaptureHint {
-                        Text(hint)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(Color(red: 0.40, green: 0.90, blue: 0.62))
-                            .fixedSize(horizontal: false, vertical: true)
-                            .transition(.opacity)
-                            .task(id: hint) {
-                                try? await Task.sleep(for: .seconds(5))
-                                guard !Task.isCancelled else { return }
-                                if viewModel.hotkeyCaptureHint == hint {
-                                    viewModel.clearHotkeyCaptureHint()
-                                }
-                            }
                     }
                 }
             }
