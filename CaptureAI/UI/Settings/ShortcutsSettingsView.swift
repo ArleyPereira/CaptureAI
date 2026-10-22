@@ -205,6 +205,7 @@ private struct ShortcutCard<Extra: View>: View {
                         }
                         .buttonStyle(GhostButtonStyle())
                         .help("Restaurar o padrão")
+                        .accessibilityLabel("Restaurar o padrão")
                     }
                     Button(isRecording ? "Cancelar" : "Alterar") {
                         if isRecording {
