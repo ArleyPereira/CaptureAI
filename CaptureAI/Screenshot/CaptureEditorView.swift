@@ -293,7 +293,14 @@ final class CaptureEditorView: NSView {
                     drag = .moving(last: point)
                     NSCursor.closedHand.set()
                 } else {
-                    draft = Annotation(tool: model.tool, color: model.color, start: point, end: point)
+                    draft = Annotation(
+                        tool: model.tool,
+                        color: model.color,
+                        start: point,
+                        end: point,
+                        lineWidth: model.lineWidth.rawValue,
+                        points: model.tool == .pen ? [point] : []
+                    )
                     drag = .annotating
                 }
                 return
@@ -333,7 +340,12 @@ final class CaptureEditorView: NSView {
 
         case .annotating:
             guard let selection else { return }
-            draft?.end = clamp(point, to: selection)
+            let clamped = clamp(point, to: selection)
+            draft?.end = clamped
+            // Amostras quase no mesmo lugar só engordariam o trajeto.
+            if draft?.tool == .pen, let last = draft?.points.last, hypot(clamped.x - last.x, clamped.y - last.y) >= 1.5 {
+                draft?.points.append(clamped)
+            }
 
         case .movingBubble(let id, let last, _):
             guard let selection, let index = model.annotations.firstIndex(where: { $0.id == id }) else { return }
