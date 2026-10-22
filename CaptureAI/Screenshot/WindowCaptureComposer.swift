@@ -18,7 +18,34 @@ enum WindowCaptureComposer {
         }
     }
 
-    static func compose(_ target: CapturableWindow, on screen: NSScreen) async throws -> CGImage {
+    /// Foto de uma janela tirada antes de o editor abrir.
+    struct Snapshot {
+        let windowID: CGWindowID
+        let image: CGImage
+        let frame: CGRect
+    }
+
+    /// Fotografa a janela sob o mouse no instante do atalho.
+    ///
+    /// Assim que o editor cobre a tela, a janela embaixo dele perde o hover:
+    /// botões que só aparecem com o mouse por cima (os da barra de gravação,
+    /// por exemplo) somem antes do clique. A foto antecipada guarda a janela
+    /// como estava quando a pessoa apertou o atalho.
+    static func snapshot(of target: CapturableWindow, scale: CGFloat) async -> Snapshot? {
+        guard
+            !target.isDesktop,
+            let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
+            let scWindow = content.windows.first(where: { $0.windowID == target.id }),
+            let image = try? await captureWindow(scWindow, scale: scale)
+        else { return nil }
+        return Snapshot(windowID: target.id, image: image, frame: scWindow.frame)
+    }
+
+    static func compose(
+        _ target: CapturableWindow,
+        on screen: NSScreen,
+        snapshot: Snapshot? = nil
+    ) async throws -> CGImage {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
 
         // A área de trabalho é só o papel de parede: sem ícones, sem margem,
@@ -30,17 +57,24 @@ enum WindowCaptureComposer {
             return wallpaper
         }
 
-        guard let scWindow = content.windows.first(where: { $0.windowID == target.id }) else {
-            throw ComposeError.windowGone
-        }
         let scale = screen.backingScaleFactor
-
-        let windowImage = try await captureWindow(scWindow, scale: scale)
+        let windowImage: CGImage
+        let windowFrame: CGRect
+        if let snapshot, snapshot.windowID == target.id {
+            windowImage = snapshot.image
+            windowFrame = snapshot.frame
+        } else {
+            guard let scWindow = content.windows.first(where: { $0.windowID == target.id }) else {
+                throw ComposeError.windowGone
+            }
+            windowImage = try await captureWindow(scWindow, scale: scale)
+            windowFrame = scWindow.frame
+        }
         let wallpaper = try? await captureWallpaper(content: content, screen: screen, scale: scale)
 
         return render(
             window: windowImage,
-            windowFrame: scWindow.frame,
+            windowFrame: windowFrame,
             wallpaper: wallpaper,
             screen: screen,
             scale: scale

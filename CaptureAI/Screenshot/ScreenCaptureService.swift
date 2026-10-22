@@ -112,6 +112,10 @@ final class ScreenCaptureService {
         // Tirada antes do congelamento: depois dele o editor já estaria por cima.
         let capturable = CapturableWindow.onScreen()
 
+        // A janela sob o mouse é fotografada junto com o congelamento, antes
+        // de o editor cobrir a tela e tirar o hover dela.
+        async let early = Self.snapshotUnderMouse(capturable)
+
         let frozen: [ScreenFreezer.FrozenScreen]
         do {
             frozen = try await ScreenFreezer.freezeAll()
@@ -120,6 +124,7 @@ final class ScreenCaptureService {
             throw CaptureError.freezeFailed(error.localizedDescription)
         }
         guard !frozen.isEmpty else { throw CaptureError.freezeFailed("nenhum monitor") }
+        let snapshot = await early
         logger.notice("Tela congelada: \(frozen.count, privacy: .public) monitor(es).")
 
         // O F chegou enquanto congelava: a foto já é a tela inteira, nem abre o editor.
@@ -145,7 +150,7 @@ final class ScreenCaptureService {
             logger.notice("Captura para salvar: \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
             return .save(image, scale: scale)
         case .window(let window, let screen):
-            let image = try await WindowCaptureComposer.compose(window, on: screen)
+            let image = try await WindowCaptureComposer.compose(window, on: screen, snapshot: snapshot)
             logger.notice("Janela capturada (\(window.ownerName, privacy: .public)): \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
             return .thumbnail(image, scale: screen.backingScaleFactor)
         case .fullScreen(let image, let scale):
@@ -155,5 +160,18 @@ final class ScreenCaptureService {
             logger.notice("Captura cancelada.")
             return .cancelled
         }
+    }
+
+    /// A janela da frente no ponto do mouse, fotografada como está agora.
+    private static func snapshotUnderMouse(_ windows: [CapturableWindow]) async -> WindowCaptureComposer.Snapshot? {
+        let mouse = NSEvent.mouseLocation
+        guard
+            let primary = NSScreen.screens.first,
+            let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) })
+        else { return nil }
+        // `CGWindowList` usa origem no canto superior esquerdo do monitor principal.
+        let point = CGPoint(x: mouse.x, y: primary.frame.maxY - mouse.y)
+        guard let target = windows.first(where: { $0.frame.contains(point) }) else { return nil }
+        return await WindowCaptureComposer.snapshot(of: target, scale: screen.backingScaleFactor)
     }
 }
