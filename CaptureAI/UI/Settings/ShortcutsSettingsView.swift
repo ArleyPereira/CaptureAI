@@ -193,36 +193,18 @@ private struct ShortcutCard<Extra: View>: View {
                 ShortcutRecorderField(
                     keyParts: keyParts,
                     isRecording: isRecording,
-                    hint: isRecording ? hint : nil
+                    hint: isRecording ? hint : nil,
+                    onStart: { viewModel.beginHotkeyCapture(target) }
                 ) {
-                    if isRecording {
-                        viewModel.cancelHotkeyCapture()
-                    } else {
-                        viewModel.beginHotkeyCapture(target)
-                    }
-                }
-
-                HStack(spacing: 8) {
-                    if let hint, !isRecording {
-                        Text(hint)
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(Color(red: 0.40, green: 0.90, blue: 0.62))
-                            .fixedSize(horizontal: false, vertical: true)
-                            .transition(.opacity)
-                            .task(id: hint) {
-                                try? await Task.sleep(for: .seconds(5))
-                                guard !Task.isCancelled else { return }
-                                if viewModel.hotkeyCaptureHint == hint {
-                                    viewModel.clearHotkeyCaptureHint()
-                                }
-                            }
-                    }
-
-                    Spacer(minLength: 8)
-
-                    if !isDefault {
-                        Button("Restaurar padrão") { viewModel.resetHotkey(target) }
-                            .buttonStyle(GhostButtonStyle())
+                    if !isDefault && !isRecording {
+                        Button {
+                            viewModel.resetHotkey(target)
+                        } label: {
+                            Image(systemName: "arrow.counterclockwise")
+                                .font(.system(size: 11.5, weight: .semibold))
+                        }
+                        .buttonStyle(GhostButtonStyle())
+                        .help("Restaurar o padrão")
                     }
                     Button(isRecording ? "Cancelar" : "Alterar") {
                         if isRecording {
@@ -232,6 +214,21 @@ private struct ShortcutCard<Extra: View>: View {
                         }
                     }
                     .buttonStyle(GhostButtonStyle())
+                }
+
+                if let hint, !isRecording {
+                    Label(hint, systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Color(red: 0.40, green: 0.90, blue: 0.62))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .transition(.opacity)
+                        .task(id: hint) {
+                            try? await Task.sleep(for: .seconds(5))
+                            guard !Task.isCancelled else { return }
+                            if viewModel.hotkeyCaptureHint == hint {
+                                viewModel.clearHotkeyCaptureHint()
+                            }
+                        }
                 }
 
                 if !(extra is EmptyView) {
@@ -266,58 +263,62 @@ private struct ShortcutGlyph: View {
     }
 }
 
-/// Faixa com as teclas do atalho; clicada, passa a escutar o novo atalho.
-private struct ShortcutRecorderField: View {
+/// Faixa com as teclas do atalho e os botões à direita; clicar na faixa
+/// também começa a gravar o novo atalho.
+private struct ShortcutRecorderField<Actions: View>: View {
     let keyParts: [HotkeyKeyPart]
     let isRecording: Bool
     let hint: String?
-    let action: () -> Void
+    let onStart: () -> Void
+    @ViewBuilder var actions: Actions
 
     @State private var pulse = false
     @State private var isHovering = false
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                if isRecording {
-                    Circle()
-                        .fill(SettingsTheme.accent)
-                        .frame(width: 8, height: 8)
-                        .opacity(pulse ? 0.35 : 1)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Pressione o novo atalho…")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(SettingsTheme.accent)
-                        Text(hint ?? "Esc cancela")
-                            .font(.system(size: 11))
-                            .foregroundStyle(SettingsTheme.secondaryLabel(colorScheme))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                } else {
-                    ShortcutKeys(parts: keyParts, size: .large)
+        HStack(spacing: 10) {
+            if isRecording {
+                Circle()
+                    .fill(SettingsTheme.accent)
+                    .frame(width: 8, height: 8)
+                    .opacity(pulse ? 0.35 : 1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pressione o novo atalho…")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(SettingsTheme.accent)
+                    Text(hint ?? "Esc cancela")
+                        .font(.system(size: 11))
+                        .foregroundStyle(SettingsTheme.secondaryLabel(colorScheme))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 0)
+            } else {
+                ShortcutKeys(parts: keyParts, size: .large)
             }
-            .padding(.horizontal, 14)
-            .frame(minHeight: 62)
-            .background {
-                RoundedRectangle(cornerRadius: SettingsTheme.fieldCornerRadius, style: .continuous)
-                    .fill(SettingsTheme.fieldFill(colorScheme).opacity(isHovering && !isRecording ? 1.4 : 1))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: SettingsTheme.fieldCornerRadius, style: .continuous)
-                    .strokeBorder(
-                        isRecording
-                            ? SettingsTheme.accent.opacity(pulse ? 0.45 : 0.95)
-                            : SettingsTheme.fieldStroke(colorScheme),
-                        lineWidth: isRecording ? 1.5 : SettingsTheme.hairline
-                    )
-            }
-            .shadow(color: isRecording ? SettingsTheme.accent.opacity(pulse ? 0.12 : 0.35) : .clear, radius: 14)
-            .contentShape(Rectangle())
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 6) { actions }
         }
-        .buttonStyle(.plain)
+        .padding(.leading, 14)
+        .padding(.trailing, 10)
+        .frame(minHeight: 62)
+        .background {
+            RoundedRectangle(cornerRadius: SettingsTheme.fieldCornerRadius, style: .continuous)
+                .fill(SettingsTheme.fieldFill(colorScheme).opacity(isHovering && !isRecording ? 1.5 : 1))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: SettingsTheme.fieldCornerRadius, style: .continuous)
+                .strokeBorder(
+                    isRecording
+                        ? SettingsTheme.accent.opacity(pulse ? 0.45 : 0.95)
+                        : SettingsTheme.fieldStroke(colorScheme),
+                    lineWidth: isRecording ? 1.5 : SettingsTheme.hairline
+                )
+        }
+        .shadow(color: isRecording ? SettingsTheme.accent.opacity(pulse ? 0.12 : 0.35) : .clear, radius: 14)
+        .contentShape(Rectangle())
+        .onTapGesture { if !isRecording { onStart() } }
         .help(isRecording ? "Esc cancela" : "Clique para gravar outro atalho")
         .onHover { isHovering = $0 }
         .onChange(of: isRecording, initial: true) { _, recording in
@@ -372,13 +373,19 @@ private struct ShortcutKeyCap: View {
         .padding(.horizontal, large ? 13 : 7)
         .frame(minWidth: large ? 38 : 22, minHeight: large ? 36 : 22)
         .background {
+            // Face da tecla sobre uma base escura um pouco mais baixa: o
+            // relevo vem do degrau, não de cor.
             RoundedRectangle(cornerRadius: large ? 9 : 6, style: .continuous)
-                .fill(SettingsTheme.cardFill(colorScheme).opacity(2.2))
-                .offset(y: large ? 2.5 : 1.5)
+                .fill(Color.black.opacity(colorScheme == .dark ? 0.35 : 0.12))
+                .offset(y: large ? 2 : 1.5)
         }
         .background {
             RoundedRectangle(cornerRadius: large ? 9 : 6, style: .continuous)
-                .fill(SettingsTheme.fieldFill(colorScheme).opacity(1.8))
+                .fill(SettingsTheme.cardFill(colorScheme).opacity(1.6))
+                .background(
+                    RoundedRectangle(cornerRadius: large ? 9 : 6, style: .continuous)
+                        .fill(colorScheme == .dark ? Color(white: 0.20) : Color(white: 0.97))
+                )
         }
         .overlay {
             RoundedRectangle(cornerRadius: large ? 9 : 6, style: .continuous)
