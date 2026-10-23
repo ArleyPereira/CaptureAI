@@ -55,6 +55,9 @@ final class TextRecognitionPanelController: NSObject, NSWindowDelegate {
 
         let overlay = ImageAnalysisOverlayView()
         overlay.preferredInteractionTypes = .textSelection
+        // O botão do Texto ao Vivo no canto cobriria o texto de recortes
+        // baixos, e a seleção funciona sem ele.
+        overlay.isSupplementaryInterfaceHidden = true
         overlay.delegate = self
 
         let root = TextRecognitionView(
@@ -63,12 +66,15 @@ final class TextRecognitionPanelController: NSObject, NSWindowDelegate {
             imageSize: imageSize,
             overlay: overlay
         )
-        let hosting = NSHostingView(rootView: root)
+        let hosting = FirstMouseHostingView(rootView: root)
         let contentSize = hosting.fittingSize
 
         let panel = TextRecognitionPanel(
             contentRect: NSRect(origin: .zero, size: contentSize),
-            styleMask: [.titled, .closable, .fullSizeContentView],
+            // Não ativador, como o Spotlight: recebe teclado e clique sem
+            // tirar o foco do app em que a pessoa estava. Ativando, o primeiro
+            // clique só trazia o CaptureAI para a frente e o botão não reagia.
+            styleMask: [.titled, .closable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -79,6 +85,7 @@ final class TextRecognitionPanelController: NSObject, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        panel.becomesKeyOnlyIfNeeded = false
         panel.contentView = hosting
         panel.delegate = self
         panel.onCopyShortcut = { [weak self] in self?.copy() }
@@ -94,7 +101,6 @@ final class TextRecognitionPanelController: NSObject, NSWindowDelegate {
         self.state = state
         self.overlay = overlay
 
-        NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
 
         analysisTask = Task { [weak self] in
@@ -215,6 +221,12 @@ extension TextRecognitionPanelController: ImageAnalysisOverlayViewDelegate {
     }
 }
 
+/// Aceita o clique que também dá foco à janela: sem isso, o primeiro clique
+/// num botão só tornava o painel ativo.
+private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// Painel que fecha no Esc e trata o ⌘C mesmo sem seleção.
 final class TextRecognitionPanel: NSPanel {
     var onCopyShortcut: () -> Void = {}
@@ -245,10 +257,11 @@ private struct TextRecognitionView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Na mesma linha dos botões da barra de título.
             header
+                .frame(height: 28)
                 .padding(.horizontal, 18)
-                .padding(.top, 14)
-                .padding(.bottom, 12)
+                .padding(.bottom, 8)
 
             LiveTextImage(image: image, overlay: overlay)
                 .frame(width: imageSize.width, height: imageSize.height)
@@ -271,12 +284,15 @@ private struct TextRecognitionView: View {
                 .padding(.vertical, 14)
         }
         .frame(minWidth: 440)
+        // O conteúdo começa no topo da janela, sob a barra de título
+        // transparente, para o título dividir a linha com os botões dela.
+        .ignoresSafeArea(edges: .top)
         .background(Color(red: 0.11, green: 0.12, blue: 0.14))
         .environment(\.colorScheme, .dark)
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: "text.viewfinder")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(SettingsTheme.accent)
@@ -286,7 +302,7 @@ private struct TextRecognitionView: View {
             Spacer(minLength: 12)
         }
         // Espaço para os botões da barra de título, que ficam por cima.
-        .padding(.leading, 56)
+        .padding(.leading, 62)
     }
 
     private var footer: some View {
