@@ -72,12 +72,13 @@ final class ScreenCaptureService {
         return frozen.first { $0.screen.frame.contains(mouse) } ?? frozen.first
     }
 
-    /// Pede o modo janela. Vale para o editor aberto ou para o que está abrindo.
-    func requestWindowMode() {
+    /// Pede um modo (janela ou texto). Vale para o editor aberto ou para o
+    /// que está abrindo.
+    func requestMode(_ mode: CaptureMode) {
         if editor.isPresenting {
-            editor.setMode(.window)
+            editor.setMode(mode)
         } else if isCapturing {
-            pendingMode = .window
+            pendingMode = mode
         }
     }
 
@@ -88,6 +89,8 @@ final class ScreenCaptureService {
         /// Janela ou tela inteira: ganha a miniatura flutuante, onde se decide
         /// entre copiar e salvar — são os modos sem barra de ações na tela.
         case thumbnail(CGImage, scale: CGFloat)
+        /// Recorte do modo texto, para reconhecer o texto.
+        case text(CGImage, scale: CGFloat)
         case cancelled
     }
 
@@ -153,6 +156,9 @@ final class ScreenCaptureService {
             let image = try await WindowCaptureComposer.compose(window, on: screen, snapshot: snapshot)
             logger.notice("Janela capturada (\(window.ownerName, privacy: .public)): \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
             return .thumbnail(image, scale: screen.backingScaleFactor)
+        case .text(let image, let scale):
+            logger.notice("Recorte para texto: \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
+            return .text(image, scale: scale)
         case .fullScreen(let image, let scale):
             logger.notice("Tela inteira: \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
             return .thumbnail(image, scale: scale)

@@ -360,7 +360,7 @@ final class SettingsViewModel {
             // W e F completam o atalho segurado: como tecla principal, o
             // acorde de janela ou de tela inteira nunca aconteceria.
             if hotkey.usesChordKey {
-                hotkeyCaptureHint = "W e F ficam reservadas para janela e tela inteira. Escolha outra tecla."
+                hotkeyCaptureHint = "W, F e T ficam reservadas para janela, tela inteira e texto. Escolha outra tecla."
                 return nil
             }
             captureHotkey = hotkey

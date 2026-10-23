@@ -28,6 +28,8 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
     var onWindowModeRequested: (@Sendable () -> Void)?
     /// Tela inteira: F apertado com o atalho principal segurado.
     var onFullScreenRequested: (@Sendable () -> Void)?
+    /// Texto: T apertado com o atalho principal segurado.
+    var onTextModeRequested: (@Sendable () -> Void)?
 
     /// O atalho principal está pressionado agora.
     private var isMainHeld = false
@@ -47,6 +49,7 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
     private let mainID = EventHotKeyID(signature: CaptureHotkeyService.signature, id: 2)
     private let windowKeyID = EventHotKeyID(signature: CaptureHotkeyService.signature, id: 3)
     private let fullScreenKeyID = EventHotKeyID(signature: CaptureHotkeyService.signature, id: 4)
+    private let textKeyID = EventHotKeyID(signature: CaptureHotkeyService.signature, id: 5)
 
     func start(keyCode: UInt32, modifiers: UInt32) {
         stop()
@@ -98,13 +101,13 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
         }
     }
 
-    /// W e F viram atalho só enquanto o principal está segurado.
+    /// W, F e T viram atalho só enquanto o principal está segurado.
     private func registerModeKey() {
         lock.lock()
         defer { lock.unlock() }
         guard modeKeyTap == nil, modeKeyRefs.isEmpty else { return }
         if installModeKeyTap() { return }
-        for (key, id) in [(kVK_ANSI_W, windowKeyID), (kVK_ANSI_F, fullScreenKeyID)] {
+        for (key, id) in [(kVK_ANSI_W, windowKeyID), (kVK_ANSI_F, fullScreenKeyID), (kVK_ANSI_T, textKeyID)] {
             var ref: EventHotKeyRef?
             // Com os modificadores do principal: eles continuam apertados
             // durante o acorde (⌘⇧2 segurado + W).
@@ -130,7 +133,7 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
         modeKeyTapSource = nil
     }
 
-    /// Liga o tap que engole W e F. Roda no laço principal, o mesmo dos
+    /// Liga o tap que engole W, F e T. Roda no laço principal, o mesmo dos
     /// eventos Carbon, então `handle` nunca é chamado em paralelo.
     private func installModeKeyTap() -> Bool {
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue) | CGEventMask(1 << CGEventType.keyUp.rawValue)
@@ -172,6 +175,7 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
         switch Int(event.getIntegerValueField(.keyboardEventKeycode)) {
         case kVK_ANSI_W: id = windowKeyID.id
         case kVK_ANSI_F: id = fullScreenKeyID.id
+        case kVK_ANSI_T: id = textKeyID.id
         default: return Unmanaged.passUnretained(event)
         }
 
@@ -256,7 +260,11 @@ nonisolated final class CaptureHotkeyService: @unchecked Sendable {
             guard isMainHeld, !chordConsumed else { break }
             chordConsumed = true
             onFullScreenRequested?()
-        case (windowKeyID.id, false), (fullScreenKeyID.id, false):
+        case (textKeyID.id, true):
+            guard isMainHeld, !chordConsumed else { break }
+            chordConsumed = true
+            onTextModeRequested?()
+        case (windowKeyID.id, false), (fullScreenKeyID.id, false), (textKeyID.id, false):
             break
         default:
             return OSStatus(eventNotHandledErr)

@@ -9,6 +9,8 @@ enum CaptureEditorResult {
     case window(CapturableWindow, screen: NSScreen)
     /// Tela inteira do monitor onde está o mouse, da foto congelada.
     case fullScreen(CGImage, scale: CGFloat)
+    /// Modo texto: o recorte, para reconhecer o texto dele.
+    case text(CGImage, scale: CGFloat)
     case cancelled
 }
 
@@ -40,6 +42,7 @@ final class CaptureEditorController {
         model.onCancel = { [weak self] in self?.complete(with: .cancelled) }
         model.onFullScreen = { [weak self] in self?.captureFullScreen() }
         model.onChange = { [weak self] in self?.refresh() }
+        model.onExtractText = { [weak self] in self?.finishText() }
         model.onOpenColorPanel = { [weak self] in self?.openColorPanel() }
         model.onCaptureWindow = { [weak self] window in
             guard let self else { return }
@@ -91,10 +94,10 @@ final class CaptureEditorController {
         complete(with: .fullScreen(window.editor.frozen, scale: window.backingScaleFactor))
     }
 
-    /// Troca de modo vinda de fora — o W segurado junto com o Print Screen.
+    /// Troca de modo vinda de fora — o W ou o T segurado junto com o atalho.
     func setMode(_ mode: CaptureMode) {
-        guard isPresenting, model.mode != mode else { return }
-        model.toggleMode()
+        guard isPresenting else { return }
+        model.setMode(mode)
     }
 
     /// Redesenha e devolve o teclado ao editor ativo.
@@ -170,6 +173,14 @@ final class CaptureEditorController {
         else { return }
         let scale = active.backingScaleFactor
         complete(with: asCopy ? .copy(image, scale: scale) : .save(image, scale: scale))
+    }
+
+    private func finishText() {
+        guard
+            let active = windows.first(where: { $0.editor.selection != nil }),
+            let image = active.editor.renderSelection()
+        else { return }
+        complete(with: .text(image, scale: active.backingScaleFactor))
     }
 
     private func complete(with result: CaptureEditorResult) {

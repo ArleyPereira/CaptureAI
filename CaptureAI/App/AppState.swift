@@ -298,12 +298,17 @@ final class AppState {
         }
         captureHotkeyService.onWindowModeRequested = { [weak self] in
             Task { @MainActor in
-                self?.captureCoordinator.requestWindowMode()
+                self?.captureCoordinator.requestMode(.window)
             }
         }
         captureHotkeyService.onFullScreenRequested = { [weak self] in
             Task { @MainActor in
                 self?.captureCoordinator.requestFullScreen()
+            }
+        }
+        captureHotkeyService.onTextModeRequested = { [weak self] in
+            Task { @MainActor in
+                self?.captureCoordinator.requestMode(.text)
             }
         }
         let hotkey = settings.captureHotkey
