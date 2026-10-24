@@ -68,9 +68,9 @@ struct CaptureHotkey: Equatable, Sendable {
         return CaptureHotkey(keyCode: keyCode, modifiers: carbon)
     }
 
-    /// A tecla principal é uma das que completam o acorde (W, F ou T).
+    /// A tecla principal é uma das que completam o acorde (W, F, T ou S).
     var usesChordKey: Bool {
-        [kVK_ANSI_W, kVK_ANSI_F, kVK_ANSI_T].contains(Int(keyCode))
+        [kVK_ANSI_W, kVK_ANSI_F, kVK_ANSI_T, kVK_ANSI_S].contains(Int(keyCode))
     }
 
     /// Teclas que podem virar atalho sem nenhum modificador.

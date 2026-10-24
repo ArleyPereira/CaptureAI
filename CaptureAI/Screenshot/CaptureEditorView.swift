@@ -106,9 +106,13 @@ final class CaptureEditorView: NSView {
             drawGuides(context)
             drawHint(
                 context,
-                text: model.mode == .text
-                    ? "Arraste sobre o texto que quer copiar  ·  T para área  ·  Esc para sair"
-                    : "Arraste para selecionar  ·  W para janela  ·  T para texto  ·  F para tela inteira  ·  Esc para sair"
+                text: {
+                    switch model.mode {
+                    case .text: return "Arraste sobre o texto que quer copiar  ·  T para área  ·  Esc para sair"
+                    case .scroll: return "Arraste sobre a parte que vai rolar  ·  S para área  ·  Esc para sair"
+                    default: return "Arraste para selecionar  ·  W para janela  ·  T para texto  ·  S para scroll  ·  F para tela inteira  ·  Esc para sair"
+                    }
+                }()
             )
             return
         }
@@ -239,12 +243,24 @@ final class CaptureEditorView: NSView {
 
     /// Abaixo da seleção, alinhada à direita; acima ou por dentro quando falta espaço.
     private func layoutToolbar() {
-        guard let selection, !isCreating, model.mode == .area else {
+        guard let selection, !isCreating, model.mode == .area || model.mode == .scroll else {
             toolbarHost.isHidden = true
             return
         }
         let size = toolbarHost.fittingSize
         let gap: CGFloat = 10
+        if model.mode == .scroll {
+            // O botão de começar fica centralizado logo acima da área; dentro
+            // dela, no alto, quando a área encosta no topo do monitor.
+            var origin = CGPoint(x: selection.midX - size.width / 2, y: selection.maxY + 2)
+            if origin.y + size.height > bounds.maxY - 4 {
+                origin.y = selection.maxY - size.height - 6
+            }
+            origin.x = min(max(origin.x, bounds.minX + gap), bounds.maxX - size.width - gap)
+            toolbarHost.frame = CGRect(origin: origin, size: size)
+            toolbarHost.isHidden = false
+            return
+        }
         var origin = CGPoint(x: selection.maxX - size.width, y: selection.minY - size.height - gap)
         if origin.y < bounds.minY + gap {
             origin.y = selection.maxY + gap
@@ -677,6 +693,8 @@ final class CaptureEditorView: NSView {
         guard model.editingBubbleID == nil else { return false }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard flags.contains(.command) || flags.contains(.control) else { return false }
+        // Sem imagem pronta não há o que copiar nem salvar.
+        guard model.mode != .scroll else { return false }
         switch event.charactersIgnoringModifiers?.lowercased() {
         case "c": model.onCopy(); return true
         case "s": model.onSave(); return true
@@ -690,7 +708,10 @@ final class CaptureEditorView: NSView {
         if handleShortcut(event) { return }
         switch event.keyCode {
         case 53: model.onCancel()                       // Esc
-        case 36, 76: if selection != nil { model.onCopy() }  // Enter
+        case 36, 76:                                    // Enter
+            guard selection != nil else { break }
+            if model.mode == .scroll { model.onStartScroll() } else { model.onCopy() }
+        case 1: model.toggle(.scroll)                   // S
         case 13: model.toggle(.window)                  // W
         case 17: model.toggle(.text)                    // T
         case 3: model.onFullScreen()                    // F

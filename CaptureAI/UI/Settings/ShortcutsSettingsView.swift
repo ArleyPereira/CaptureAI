@@ -46,6 +46,7 @@ struct ShortcutsSettingsView: View {
             chordRow(key: "W", icon: "macwindow", title: "Capturar uma janela")
             chordRow(key: "F", icon: "rectangle.dashed", title: "Capturar a tela inteira")
             chordRow(key: "T", icon: "text.viewfinder", title: "Copiar o texto de uma área")
+            chordRow(key: "S", icon: "arrow.down.to.line", title: "Capturar com scroll")
         }
     }
 
@@ -94,6 +95,7 @@ struct ShortcutsSettingsView: View {
         .init(keys: ["W"], title: "Alternar modo janela"),
         .init(keys: ["F"], title: "Tela inteira"),
         .init(keys: ["T"], title: "Alternar modo texto"),
+        .init(keys: ["S"], title: "Alternar captura com scroll"),
         .init(keys: ["⌘", "C"], title: "Copiar"),
         .init(keys: ["Return"], title: "Copiar"),
         .init(keys: ["⌘", "S"], title: "Salvar"),
