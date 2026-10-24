@@ -13,6 +13,7 @@ final class ScreenCaptureCoordinator {
     private let service: ScreenCaptureService
     private let store: ScreenshotStore
     private let thumbnail = CaptureThumbnailController()
+    private let textPanel = TextRecognitionPanelController()
     private let logger = Logger(subsystem: "dev.arley.santana.CaptureAI", category: "screen-capture")
 
     /// Última mensagem para a UI (sucesso ou falha), consumida pela aba.
@@ -46,6 +47,8 @@ final class ScreenCaptureCoordinator {
                 // para a miniatura. Nada vai para a área de transferência nem
                 // para a pasta até a pessoa escolher Copy ou Save.
                 showThumbnail(image, scale: scale)
+            case .text(let image, let scale):
+                textPanel.show(image, scale: scale)
             }
         } catch {
             logger.error("Captura falhou: \(error.localizedDescription, privacy: .public)")
@@ -124,13 +127,13 @@ final class ScreenCaptureCoordinator {
         }
     }
 
-    /// Acorde Print Screen + W: abre direto no modo janela ou, se o editor
-    /// já estiver aberto ou abrindo, troca para ele.
-    func requestWindowMode() {
+    /// Acorde Print Screen + W ou + T: abre direto no modo janela ou texto
+    /// ou, se o editor já estiver aberto ou abrindo, troca para ele.
+    func requestMode(_ mode: CaptureMode) {
         if service.isBusy {
-            service.requestWindowMode()
+            service.requestMode(mode)
         } else {
-            beginCapture(mode: .window)
+            beginCapture(mode: mode)
         }
     }
 

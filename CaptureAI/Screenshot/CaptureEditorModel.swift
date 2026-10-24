@@ -75,10 +75,14 @@ enum StrokeWidth: CGFloat, CaseIterable, Identifiable {
     }
 }
 
-/// Modo do editor: arrastar uma área ou clicar numa janela.
+/// Modo do editor: arrastar uma área, clicar numa janela ou arrastar sobre
+/// um texto para copiá-lo.
 enum CaptureMode {
     case area
     case window
+    /// Seleção como a de área, sem barra: ao soltar, o recorte vai para o
+    /// reconhecimento de texto.
+    case text
 }
 
 /// Uma janela que pode ser capturada, como estava no instante do atalho.
@@ -466,6 +470,8 @@ final class CaptureEditorModel {
     @ObservationIgnored var onCancel: () -> Void = {}
     @ObservationIgnored var onFullScreen: () -> Void = {}
     @ObservationIgnored var onCaptureWindow: (CapturableWindow) -> Void = { _ in }
+    /// Modo texto: a seleção terminou e o recorte vai para o reconhecimento.
+    @ObservationIgnored var onExtractText: () -> Void = {}
     @ObservationIgnored var onOpenColorPanel: () -> Void = {}
     /// Pede redesenho e devolve o teclado ao editor depois de um clique na barra.
     @ObservationIgnored var onChange: () -> Void = {}
@@ -502,8 +508,18 @@ final class CaptureEditorModel {
         onChange()
     }
 
-    func toggleMode() {
-        mode = (mode == .area) ? .window : .area
+    /// Entra no modo pedido; pedir o modo em que já está volta para a área.
+    /// Assim W e T funcionam como interruptores, do mesmo jeito no teclado.
+    func toggle(_ target: CaptureMode) {
+        mode = (mode == target) ? .area : target
+        annotations = []
+        onChange()
+    }
+
+    /// Vai para o modo pedido sem alternar — o acorde segurado com o atalho.
+    func setMode(_ target: CaptureMode) {
+        guard mode != target else { return }
+        mode = target
         annotations = []
         onChange()
     }

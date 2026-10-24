@@ -104,7 +104,12 @@ final class CaptureEditorView: NSView {
 
         guard let selection else {
             drawGuides(context)
-            drawHint(context, text: "Arraste para selecionar  ·  W para janela  ·  F para tela inteira  ·  Esc para sair")
+            drawHint(
+                context,
+                text: model.mode == .text
+                    ? "Arraste sobre o texto que quer copiar  ·  T para área  ·  Esc para sair"
+                    : "Arraste para selecionar  ·  W para janela  ·  T para texto  ·  F para tela inteira  ·  Esc para sair"
+            )
             return
         }
 
@@ -377,6 +382,10 @@ final class CaptureEditorView: NSView {
             // Um clique sem arrasto não é uma seleção.
             if let rect = selection, rect.width < 5 || rect.height < 5 {
                 selection = nil
+            }
+            // No modo texto não há o que ajustar: soltar já entrega o recorte.
+            if model.mode == .text, selection != nil {
+                model.onExtractText()
             }
         case .annotating:
             if let draft, !draft.isNegligible {
@@ -682,7 +691,8 @@ final class CaptureEditorView: NSView {
         switch event.keyCode {
         case 53: model.onCancel()                       // Esc
         case 36, 76: if selection != nil { model.onCopy() }  // Enter
-        case 13: model.toggleMode()                     // W
+        case 13: model.toggle(.window)                  // W
+        case 17: model.toggle(.text)                    // T
         case 3: model.onFullScreen()                    // F
         default: super.keyDown(with: event)
         }
