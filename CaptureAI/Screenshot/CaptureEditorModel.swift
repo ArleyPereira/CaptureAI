@@ -548,12 +548,20 @@ struct CaptureToolbar: View {
     @Bindable var model: CaptureEditorModel
 
     var body: some View {
-        HStack(spacing: 2) {
+        Group {
             if model.mode == .scroll {
-                scrollControls
+                startCapturePill
             } else {
-                annotationControls
+                annotationBar
             }
+        }
+        .environment(\.colorScheme, .dark)
+        .fixedSize()
+    }
+
+    private var annotationBar: some View {
+        HStack(spacing: 2) {
+            annotationControls
         }
         .padding(5)
         .background {
@@ -569,8 +577,6 @@ struct CaptureToolbar: View {
                 .strokeBorder(.white.opacity(0.14), lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
-        .environment(\.colorScheme, .dark)
-        .fixedSize()
     }
 
     @ViewBuilder
@@ -650,33 +656,28 @@ struct CaptureToolbar: View {
             .padding(.leading, 4)
     }
 
-    /// Modo scroll: nada de anotar — a imagem ainda nem existe. Só confirmar
-    /// a área e começar a rolar.
-    @ViewBuilder
-    private var scrollControls: some View {
-        ToolbarIconButton(icon: "xmark", help: "Cancelar (Esc)") { model.onCancel() }
-
+    /// Modo scroll: nada de anotar — a imagem ainda nem existe. Só o botão
+    /// de começar, sozinho, centralizado acima da área (como no CleanShot X).
+    private var startCapturePill: some View {
         Button {
             model.onStartScroll()
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.down")
-                    .font(.system(size: 11.5, weight: .bold))
+                    .font(.system(size: 11, weight: .bold))
                 Text("Iniciar captura")
                     .font(.system(size: 12, weight: .semibold))
             }
             .foregroundStyle(Color.black.opacity(0.85))
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 14)
             .frame(height: 30)
-            .background {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(SettingsTheme.accent)
-            }
-            .contentShape(Rectangle())
+            .background(Capsule().fill(SettingsTheme.accent))
+            .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help("Iniciar captura (Enter)")
-        .padding(.leading, 4)
+        .help("Iniciar captura (Enter) · Esc cancela")
+        .padding(6)
     }
 
     private var separator: some View {

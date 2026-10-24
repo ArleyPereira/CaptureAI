@@ -249,6 +249,18 @@ final class CaptureEditorView: NSView {
         }
         let size = toolbarHost.fittingSize
         let gap: CGFloat = 10
+        if model.mode == .scroll {
+            // O botão de começar fica centralizado logo acima da área; dentro
+            // dela, no alto, quando a área encosta no topo do monitor.
+            var origin = CGPoint(x: selection.midX - size.width / 2, y: selection.maxY + 2)
+            if origin.y + size.height > bounds.maxY - 4 {
+                origin.y = selection.maxY - size.height - 6
+            }
+            origin.x = min(max(origin.x, bounds.minX + gap), bounds.maxX - size.width - gap)
+            toolbarHost.frame = CGRect(origin: origin, size: size)
+            toolbarHost.isHidden = false
+            return
+        }
         var origin = CGPoint(x: selection.maxX - size.width, y: selection.minY - size.height - gap)
         if origin.y < bounds.minY + gap {
             origin.y = selection.maxY + gap

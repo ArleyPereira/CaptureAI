@@ -41,6 +41,8 @@ final class ScrollingCaptureSession: NSObject {
     private let state = ScrollingCaptureState()
     private var frameWindow: NSWindow?
     private var controlsPanel: ScrollingControlsPanel?
+    private var autoScrollPanel: NSPanel?
+    private var autoScrollHosting: ScrollControlsHostingView<AutoScrollPillView>?
     private var previewPanel: NSPanel?
     private let previewView = ScrollPreviewView()
 
@@ -70,6 +72,7 @@ final class ScrollingCaptureSession: NSObject {
 
         showFrame()
         showControls()
+        showAutoScrollPill()
         showPreview()
 
         output.onProgress = { [weak self] strips, height in
@@ -123,6 +126,7 @@ final class ScrollingCaptureSession: NSObject {
         lastProgress = Date()
         previewView.strips = strips
         layoutPreview()
+        updateAutoScrollPill()
         if height >= output.maxHeight {
             state.reachedLimit = true
             stopAutoScroll()
@@ -141,6 +145,7 @@ final class ScrollingCaptureSession: NSObject {
 
     private func startAutoScroll() {
         state.isAutoScrolling = true
+        updateAutoScrollPill()
         lastProgress = Date()
         // O evento de rolagem vai para a janela sob o ponto onde ele nasce:
         // o centro da área, convertido para a origem no topo que o Quartz usa.
@@ -167,6 +172,7 @@ final class ScrollingCaptureSession: NSObject {
         autoScrollTimer?.invalidate()
         autoScrollTimer = nil
         state.isAutoScrolling = false
+        updateAutoScrollPill()
     }
 
     // MARK: - Fim
@@ -192,12 +198,13 @@ final class ScrollingCaptureSession: NSObject {
     }
 
     private func closeWindows() {
-        for window in [frameWindow, controlsPanel, previewPanel] as [NSWindow?] {
+        for window in [frameWindow, controlsPanel, autoScrollPanel, previewPanel] as [NSWindow?] {
             window?.orderOut(nil)
             window?.close()
         }
         frameWindow = nil
         controlsPanel = nil
+        autoScrollPanel = nil
         previewPanel = nil
     }
 
@@ -253,6 +260,46 @@ final class ScrollingCaptureSession: NSObject {
         panel.setFrameOrigin(origin)
         panel.makeKeyAndOrderFront(nil)
         controlsPanel = panel
+    }
+
+    /// O botão de rolagem automática, centralizado logo dentro do topo da
+    /// área. As janelas do CaptureAI não entram na gravação, então ele não
+    /// aparece na imagem mesmo estando por cima do conteúdo.
+    private func showAutoScrollPill() {
+        let hosting = ScrollControlsHostingView(rootView: AutoScrollPillView(state: state))
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: hosting.fittingSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = .statusBar
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        panel.contentView = hosting
+        autoScrollPanel = panel
+        autoScrollHosting = hosting
+        updateAutoScrollPill()
+    }
+
+    /// Como no CleanShot X: o botão some quando a pessoa começa a rolar à mão
+    /// e fica enquanto a rolagem automática está andando, para poder pausar.
+    private func updateAutoScrollPill() {
+        guard let panel = autoScrollPanel, let hosting = autoScrollHosting else { return }
+        let visible = !state.reachedLimit && (!state.hasScrolled || state.isAutoScrolling)
+        guard visible else {
+            panel.orderOut(nil)
+            return
+        }
+        let size = hosting.fittingSize
+        panel.setFrame(
+            NSRect(x: rect.midX - size.width / 2, y: rect.maxY - size.height - 8, width: size.width, height: size.height),
+            display: true
+        )
+        panel.orderFrontRegardless()
     }
 
     private static let previewWidth: CGFloat = 150
@@ -470,28 +517,43 @@ private struct ScrollingControlsView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            pill(icon: "xmark", title: "Cancelar", style: .dark, help: "Cancelar (Esc)") { state.onCancel() }
-
-            pill(
-                icon: state.isAutoScrolling ? "pause.fill" : "arrow.down.circle",
-                title: state.isAutoScrolling ? "Pausar rolagem" : "Rolagem automática",
-                style: state.isAutoScrolling ? .active : .dark,
-                help: "Rola sozinho até o fim do conteúdo"
-            ) { state.onToggleAutoScroll() }
-            .disabled(state.reachedLimit)
-
-            pill(icon: "checkmark", title: "Concluir", style: .accent, help: "Concluir (Enter)") { state.onFinish() }
+            ScrollPill(icon: "xmark", title: "Cancelar", style: .dark, help: "Cancelar (Esc)") { state.onCancel() }
+            ScrollPill(icon: "checkmark", title: "Concluir", style: .accent, help: "Concluir (Enter)") { state.onFinish() }
         }
         .padding(4)
         .environment(\.colorScheme, .dark)
         .fixedSize()
     }
+}
 
-    private enum PillStyle { case dark, active, accent }
+/// O botão de rolagem automática, dentro do topo da área.
+private struct AutoScrollPillView: View {
+    @Bindable var state: ScrollingCaptureState
 
-    private func pill(
-        icon: String, title: String, style: PillStyle, help: String, action: @escaping () -> Void
-    ) -> some View {
+    var body: some View {
+        ScrollPill(
+            icon: state.isAutoScrolling ? "pause.fill" : "arrow.down.circle",
+            title: state.isAutoScrolling ? "Pausar rolagem" : "Rolagem automática",
+            style: state.isAutoScrolling ? .active : .dark,
+            help: "Rola sozinho até o fim do conteúdo"
+        ) { state.onToggleAutoScroll() }
+        .padding(4)
+        .environment(\.colorScheme, .dark)
+        .fixedSize()
+    }
+}
+
+/// Pílula dos controles da captura com scroll.
+private struct ScrollPill: View {
+    enum Style { case dark, active, accent }
+
+    let icon: String
+    let title: String
+    let style: Style
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: icon)
