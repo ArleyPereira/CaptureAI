@@ -11,6 +11,8 @@ enum CaptureEditorResult {
     case fullScreen(CGImage, scale: CGFloat)
     /// Modo texto: o recorte, para reconhecer o texto dele.
     case text(CGImage, scale: CGFloat)
+    /// Modo scroll: a área escolhida, em coordenadas globais, e o monitor.
+    case scroll(CGRect, screen: NSScreen)
     case cancelled
 }
 
@@ -43,6 +45,7 @@ final class CaptureEditorController {
         model.onFullScreen = { [weak self] in self?.captureFullScreen() }
         model.onChange = { [weak self] in self?.refresh() }
         model.onExtractText = { [weak self] in self?.finishText() }
+        model.onStartScroll = { [weak self] in self?.finishScroll() }
         model.onOpenColorPanel = { [weak self] in self?.openColorPanel() }
         model.onCaptureWindow = { [weak self] window in
             guard let self else { return }
@@ -181,6 +184,17 @@ final class CaptureEditorController {
             let image = active.editor.renderSelection()
         else { return }
         complete(with: .text(image, scale: active.backingScaleFactor))
+    }
+
+    private func finishScroll() {
+        guard
+            let active = windows.first(where: { $0.editor.selection != nil }),
+            let selection = active.editor.selection,
+            let screen = active.screen
+        else { return }
+        // Da view (origem no canto do monitor) para a tela toda, em pontos.
+        let global = selection.offsetBy(dx: active.frame.minX, dy: active.frame.minY)
+        complete(with: .scroll(global, screen: screen))
     }
 
     private func complete(with result: CaptureEditorResult) {

@@ -306,6 +306,11 @@ final class AppState {
                 self?.captureCoordinator.requestFullScreen()
             }
         }
+        captureHotkeyService.onScrollModeRequested = { [weak self] in
+            Task { @MainActor in
+                self?.captureCoordinator.requestMode(.scroll)
+            }
+        }
         captureHotkeyService.onTextModeRequested = { [weak self] in
             Task { @MainActor in
                 self?.captureCoordinator.requestMode(.text)

@@ -83,6 +83,9 @@ enum CaptureMode {
     /// Seleção como a de área, sem barra: ao soltar, o recorte vai para o
     /// reconhecimento de texto.
     case text
+    /// Seleção da área que vai rolar; confirmada, a captura acompanha a
+    /// rolagem e emenda tudo numa imagem só.
+    case scroll
 }
 
 /// Uma janela que pode ser capturada, como estava no instante do atalho.
@@ -472,6 +475,8 @@ final class CaptureEditorModel {
     @ObservationIgnored var onCaptureWindow: (CapturableWindow) -> Void = { _ in }
     /// Modo texto: a seleção terminou e o recorte vai para o reconhecimento.
     @ObservationIgnored var onExtractText: () -> Void = {}
+    /// Modo scroll: a área foi confirmada e a captura com rolagem começa.
+    @ObservationIgnored var onStartScroll: () -> Void = {}
     @ObservationIgnored var onOpenColorPanel: () -> Void = {}
     /// Pede redesenho e devolve o teclado ao editor depois de um clique na barra.
     @ObservationIgnored var onChange: () -> Void = {}
@@ -513,6 +518,7 @@ final class CaptureEditorModel {
     func toggle(_ target: CaptureMode) {
         mode = (mode == target) ? .area : target
         annotations = []
+        if mode == .scroll { tool = .adjust }
         onChange()
     }
 
@@ -521,6 +527,7 @@ final class CaptureEditorModel {
         guard mode != target else { return }
         mode = target
         annotations = []
+        if mode == .scroll { tool = .adjust }
         onChange()
     }
 
@@ -542,6 +549,32 @@ struct CaptureToolbar: View {
 
     var body: some View {
         HStack(spacing: 2) {
+            if model.mode == .scroll {
+                scrollControls
+            } else {
+                annotationControls
+            }
+        }
+        .padding(5)
+        .background {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(.ultraThinMaterial)
+        }
+        .background {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(Color.black.opacity(0.45))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
+        .environment(\.colorScheme, .dark)
+        .fixedSize()
+    }
+
+    @ViewBuilder
+    private var annotationControls: some View {
             ForEach(AnnotationTool.allCases) { tool in
                 ToolbarIconButton(
                     icon: tool.icon,
@@ -615,23 +648,35 @@ struct CaptureToolbar: View {
             .buttonStyle(.plain)
             .help("Copiar (⌘C ou Enter)")
             .padding(.leading, 4)
+    }
+
+    /// Modo scroll: nada de anotar — a imagem ainda nem existe. Só confirmar
+    /// a área e começar a rolar.
+    @ViewBuilder
+    private var scrollControls: some View {
+        ToolbarIconButton(icon: "xmark", help: "Cancelar (Esc)") { model.onCancel() }
+
+        Button {
+            model.onStartScroll()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 11.5, weight: .bold))
+                Text("Iniciar captura")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(Color.black.opacity(0.85))
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(SettingsTheme.accent)
+            }
+            .contentShape(Rectangle())
         }
-        .padding(5)
-        .background {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(.ultraThinMaterial)
-        }
-        .background {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .fill(Color.black.opacity(0.45))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(.white.opacity(0.14), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
-        .environment(\.colorScheme, .dark)
-        .fixedSize()
+        .buttonStyle(.plain)
+        .help("Iniciar captura (Enter)")
+        .padding(.leading, 4)
     }
 
     private var separator: some View {

@@ -14,6 +14,7 @@ final class ScreenCaptureCoordinator {
     private let store: ScreenshotStore
     private let thumbnail = CaptureThumbnailController()
     private let textPanel = TextRecognitionPanelController()
+    private var scrollingSession: ScrollingCaptureSession?
     private let logger = Logger(subsystem: "dev.arley.santana.CaptureAI", category: "screen-capture")
 
     /// Última mensagem para a UI (sucesso ou falha), consumida pela aba.
@@ -49,6 +50,8 @@ final class ScreenCaptureCoordinator {
                 showThumbnail(image, scale: scale)
             case .text(let image, let scale):
                 textPanel.show(image, scale: scale)
+            case .scroll(let rect, let screen):
+                startScrollingCapture(rect, on: screen)
             }
         } catch {
             logger.error("Captura falhou: \(error.localizedDescription, privacy: .public)")
@@ -123,6 +126,26 @@ final class ScreenCaptureCoordinator {
             } catch {
                 logger.error("Tela inteira falhou: \(error.localizedDescription, privacy: .public)")
                 lastMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Captura com scroll: grava a área enquanto a pessoa rola e entrega a
+    /// imagem emendada na miniatura, como as capturas de janela.
+    private func startScrollingCapture(_ rect: CGRect, on screen: NSScreen) {
+        let session = ScrollingCaptureSession(rect: rect, screen: screen) { [weak self] image, scale in
+            guard let self else { return }
+            self.scrollingSession = nil
+            if let image { self.showThumbnail(image, scale: scale) }
+        }
+        scrollingSession = session
+        Task {
+            do {
+                try await session.start()
+            } catch {
+                logger.error("Captura com scroll falhou: \(error.localizedDescription, privacy: .public)")
+                lastMessage = error.localizedDescription
+                scrollingSession = nil
             }
         }
     }
