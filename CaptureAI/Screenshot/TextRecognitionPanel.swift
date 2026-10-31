@@ -5,6 +5,44 @@ import SwiftUI
 import Vision
 import VisionKit
 
+/// Configuração das leituras de texto do Vision e as que estão em curso.
+enum TextRecognitionRequests {
+    private nonisolated(unsafe) static var inFlight: [VNRequest] = []
+    private static let lock = NSLock()
+
+    /// Cancela as leituras em curso. O Vision atende uma por vez: uma leitura
+    /// precisa esquecida recompilando o modelo prenderia a rápida da próxima
+    /// captura.
+    nonisolated static func cancelAll() {
+        lock.lock()
+        let requests = inFlight
+        inFlight.removeAll()
+        lock.unlock()
+        requests.forEach { $0.cancel() }
+    }
+
+    nonisolated static func perform(_ request: VNRequest, on image: CGImage) throws {
+        lock.lock()
+        inFlight.append(request)
+        lock.unlock()
+        defer {
+            lock.lock()
+            inFlight.removeAll { $0 === request }
+            lock.unlock()
+        }
+        try VNImageRequestHandler(cgImage: image).perform([request])
+    }
+
+    nonisolated static func make(_ level: VNRequestTextRecognitionLevel) -> VNRecognizeTextRequest {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = level
+        request.usesLanguageCorrection = true
+        request.recognitionLanguages = ["pt-BR", "en-US"]
+        request.automaticallyDetectsLanguage = true
+        return request
+    }
+}
+
 /// Estado do painel de texto, compartilhado entre o AppKit e o SwiftUI.
 @Observable
 @MainActor
@@ -16,7 +54,18 @@ final class TextRecognitionState {
         case failed
     }
 
+    /// A seleção de trechos direto na imagem (VisionKit).
+    enum Selection: Equatable {
+        case loading
+        case ready
+        /// O serviço do sistema não respondeu a tempo: só o Copiar tudo.
+        case unavailable
+    }
+
     var status: Status = .analyzing
+    var selection: Selection = .loading
+    /// O texto exibido veio da leitura rápida e a precisa ainda não chegou.
+    var isRefining = false
     /// Texto inteiro reconhecido, na ordem de leitura.
     var transcript = ""
     /// Há um trecho selecionado na imagem agora.
@@ -109,6 +158,7 @@ final class TextRecognitionPanelController: NSObject, NSWindowDelegate {
     }
 
     func close() {
+        TextRecognitionRequests.cancelAll()
         analysisTask?.cancel()
         analysisTask = nil
         panel?.delegate = nil
@@ -126,57 +176,156 @@ final class TextRecognitionPanelController: NSObject, NSWindowDelegate {
 
     // MARK: - Reconhecimento
 
+    /// Dois reconhecimentos em paralelo, cada um com uma função.
+    ///
+    /// O texto inteiro sai do Vision, que roda dentro do próprio app e
+    /// responde em fração de segundo: é ele que libera o Copiar tudo. A
+    /// seleção de trechos na imagem vem do VisionKit, que manda a imagem para
+    /// um serviço do sistema (`mediaanalysisd`) — e esse serviço às vezes
+    /// leva 30 s para responder. Por isso o painel não espera por ele: a
+    /// seleção entra quando chegar, e se demorar o painel avisa.
     private func analyze(_ image: CGImage) async {
-        guard let state else { return }
-
-        if ImageAnalyzer.isSupported {
-            do {
-                let configuration = ImageAnalyzer.Configuration([.text])
-                let analysis = try await ImageAnalyzer().analyze(
-                    image,
-                    orientation: .up,
-                    configuration: configuration
-                )
-                guard !Task.isCancelled else { return }
-                overlay?.analysis = analysis
-                apply(transcript: analysis.transcript)
-                return
-            } catch {
-                logger.error("VisionKit falhou: \(error.localizedDescription, privacy: .public)")
+        let prepared = Self.upscaledIfSmall(image)
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await self.recognizeText(prepared) }
+            group.addTask { await self.prepareSelection(prepared) }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(4))
+                await self.selectionTimedOut()
             }
-        }
-
-        // Sem o VisionKit não há seleção na imagem, mas o texto inteiro ainda
-        // sai pelo Vision — o botão de copiar continua funcionando.
-        let text = await Self.recognizeWithVision(image)
-        guard !Task.isCancelled else { return }
-        if let text {
-            apply(transcript: text)
-        } else {
-            state.status = .failed
         }
     }
 
-    private func apply(transcript: String) {
-        guard let state else { return }
+    /// Qualidade do texto exibido: uma leitura só substitui outra pior.
+    private enum Quality: Int, Comparable {
+        case none, fast, accurate
+        static func < (a: Quality, b: Quality) -> Bool { a.rawValue < b.rawValue }
+    }
+    private var quality: Quality = .none
+
+    /// Leitura rápida primeiro, precisa depois.
+    ///
+    /// A precisa acerta mais (acentos, números), mas depende de um modelo do
+    /// Neural Engine que o sistema às vezes precisa recompilar — com o disco
+    /// quase cheio o macOS apaga esse cache em menos de um minuto, e a leitura
+    /// leva de 25 a 40 s. A rápida usa um modelo leve que responde em fração
+    /// de segundo mesmo assim: ela libera o Copiar tudo e a precisa troca o
+    /// texto quando chegar.
+    ///
+    /// Em sequência, não em paralelo: o Vision atende uma leitura de texto
+    /// por vez no processo, e a rápida ficaria presa atrás da precisa.
+    private func recognizeText(_ image: CGImage) async {
+        await read(image, level: .fast)
+        if quality == .fast { state?.isRefining = true }
+        await read(image, level: .accurate)
+        guard !Task.isCancelled, let state else { return }
+        state.isRefining = false
+        if quality == .none, state.status == .analyzing {
+            state.status = .empty
+        }
+    }
+
+    private func read(_ image: CGImage, level: VNRequestTextRecognitionLevel) async {
+        let start = Date()
+        let text = await Self.recognizeWithVision(image, level: level)
+        guard !Task.isCancelled, let state else { return }
+        let name = level == .fast ? "rápida" : "precisa"
+        logger.notice("Leitura \(name, privacy: .public): \(String(format: "%.2f", Date().timeIntervalSince(start)), privacy: .public) s.")
+        guard let text, !text.isEmpty else {
+            if level == .accurate { state.isRefining = false }
+            return
+        }
+        apply(transcript: text, quality: level == .fast ? .fast : .accurate)
+        if level == .fast, quality == .fast { state.isRefining = true }
+        if level == .accurate { state.isRefining = false }
+    }
+
+    private func prepareSelection(_ image: CGImage) async {
+        guard ImageAnalyzer.isSupported else {
+            state?.selection = .unavailable
+            return
+        }
+        let start = Date()
+        do {
+            let analysis = try await ImageAnalyzer().analyze(
+                image,
+                orientation: .up,
+                configuration: ImageAnalyzer.Configuration([.text])
+            )
+            guard !Task.isCancelled, let state else { return }
+            logger.notice("VisionKit: \(String(format: "%.2f", Date().timeIntervalSince(start)), privacy: .public) s.")
+            overlay?.analysis = analysis
+            state.selection = .ready
+            // A ordem de leitura do VisionKit é a melhor quando ele responde.
+            if !analysis.transcript.isEmpty {
+                apply(transcript: analysis.transcript, quality: .accurate)
+                state.isRefining = false
+            }
+        } catch {
+            logger.error("VisionKit falhou: \(error.localizedDescription, privacy: .public)")
+            state?.selection = .unavailable
+        }
+    }
+
+    private func selectionTimedOut() {
+        guard let state, state.selection == .loading else { return }
+        state.selection = .unavailable
+        logger.notice("VisionKit sem resposta em 4 s; seguindo só com o Copiar tudo.")
+    }
+
+    /// Recortes muito baixos (uma linha só) são ampliados: o reconhecimento
+    /// precisa de letras com alguma altura para não desistir.
+    private nonisolated static func upscaledIfSmall(_ image: CGImage) -> CGImage {
+        let factor = min(4, max(1, Int((96.0 / Double(max(1, image.height))).rounded(.up))))
+        guard factor > 1,
+              let context = CGContext(
+                data: nil,
+                width: image.width * factor,
+                height: image.height * factor,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return image }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width * factor, height: image.height * factor))
+        return context.makeImage() ?? image
+    }
+
+    private func apply(transcript: String, quality newQuality: Quality) {
+        guard let state, newQuality > quality || (newQuality == .accurate && quality == .accurate) else { return }
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        quality = max(quality, newQuality)
         state.transcript = trimmed
-        state.status = trimmed.isEmpty ? .empty : .ready
+        state.status = .ready
         logger.notice("Texto reconhecido: \(trimmed.count, privacy: .public) caracteres.")
     }
 
-    private nonisolated static func recognizeWithVision(_ image: CGImage) async -> String? {
+    private nonisolated static func recognizeWithVision(
+        _ image: CGImage,
+        level: VNRequestTextRecognitionLevel
+    ) async -> String? {
         await Task.detached(priority: .userInitiated) {
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            request.automaticallyDetectsLanguage = true
+            var request = TextRecognitionRequests.make(level)
             do {
-                try VNImageRequestHandler(cgImage: image).perform([request])
+                try TextRecognitionRequests.perform(request, on: image)
             } catch {
-                return nil
+                // Cancelada porque o painel fechou: não insiste.
+                if Task.isCancelled || (error as NSError).code == VNErrorCode.requestCancelled.rawValue { return nil }
+                // O modelo compilado pode ter sido apagado por baixo do
+                // processo (erro e5rt): uma segunda tentativa recompila.
+                request = TextRecognitionRequests.make(level)
+                guard (try? TextRecognitionRequests.perform(request, on: image)) != nil else { return nil }
             }
-            let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            // De cima para baixo e, na mesma altura, da esquerda para a direita.
+            let observations = (request.results ?? []).sorted { a, b in
+                let ay = a.boundingBox.midY, by = b.boundingBox.midY
+                if abs(ay - by) > min(a.boundingBox.height, b.boundingBox.height) / 2 { return ay > by }
+                return a.boundingBox.minX < b.boundingBox.minX
+            }
+            let lines = observations.compactMap { $0.topCandidates(1).first?.string }
             return lines.joined(separator: "\n")
         }.value
     }
@@ -342,10 +491,31 @@ private struct TextRecognitionView: View {
             }
             .font(.system(size: 11.5))
             .foregroundStyle(.white.opacity(0.55))
+        case .ready where state.isRefining:
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.mini)
+                Text("Texto pronto · refinando a leitura…")
+            }
+            .font(.system(size: 11.5))
+            .foregroundStyle(.white.opacity(0.55))
         case .ready:
-            Text(state.hasSelection ? "Trecho selecionado" : "Arraste sobre a imagem para escolher um trecho")
+            switch state.selection {
+            case .ready:
+                Text(state.hasSelection ? "Trecho selecionado" : "Arraste sobre a imagem para escolher um trecho")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.white.opacity(0.55))
+            case .loading:
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.mini)
+                    Text("Texto pronto · preparando a seleção na imagem…")
+                }
                 .font(.system(size: 11.5))
                 .foregroundStyle(.white.opacity(0.55))
+            case .unavailable:
+                Text("A seleção na imagem está demorando — o Copiar tudo já funciona")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.white.opacity(0.55))
+            }
         case .empty:
             Label("Nenhum texto encontrado nesta área", systemImage: "text.badge.xmark")
                 .font(.system(size: 11.5))
