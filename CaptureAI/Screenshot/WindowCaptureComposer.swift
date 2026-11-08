@@ -122,6 +122,72 @@ enum WindowCaptureComposer {
         )
     }
 
+    /// Uma modal recortada da tela congelada, no estilo da captura de
+    /// janela: cantos arredondados limpos, sobre o papel de parede, com
+    /// margem e sombra.
+    static func composeModal(_ image: CGImage, frame: CGRect, on screen: NSScreen) async throws -> CGImage {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        let scale = screen.backingScaleFactor
+        let wallpaper = try? await captureWallpaper(content: content, screen: screen, scale: scale)
+        let rounded = maskCorners(of: image) ?? image
+        return render(window: rounded, windowFrame: frame, wallpaper: wallpaper, screen: screen, scale: scale) ?? rounded
+    }
+
+    /// Recorta os cantos arredondados da modal.
+    ///
+    /// O recorte retangular leva junto, nos cantos, um pedaço do fundo
+    /// escurecido da página. O raio não vem da acessibilidade, então é medido
+    /// na própria imagem: andando na diagonal a partir de cada canto, conta-se
+    /// quanto dura a cor do fundo até a borda da modal começar. Num canto de
+    /// raio r essa distância é r·(1 − 1/√2).
+    private static func maskCorners(of image: CGImage) -> CGImage? {
+        let width = image.width, height = image.height
+        guard width > 8, height > 8,
+              let context = CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
+
+        func pixel(_ x: Int, _ y: Int) -> (Int, Int, Int) {
+            let index = (y * width + x) * 4
+            return (Int(data[index]), Int(data[index + 1]), Int(data[index + 2]))
+        }
+        let limit = min(width, height) / 4
+        var distances: [Int] = []
+        for (cx, dx) in [(0, 1), (width - 1, -1)] {
+            for (cy, dy) in [(0, 1), (height - 1, -1)] {
+                let corner = pixel(cx, cy)
+                var step = 0
+                while step < limit {
+                    let p = pixel(cx + dx * step, cy + dy * step)
+                    if abs(p.0 - corner.0) + abs(p.1 - corner.1) + abs(p.2 - corner.2) > 12 { break }
+                    step += 1
+                }
+                distances.append(step)
+            }
+        }
+        // A mediana resiste a um canto com conteúdo encostado.
+        let sorted = distances.sorted()
+        let typical = Double(sorted[1] + sorted[2]) / 2
+        let radius = min(typical / (1 - 1 / 2.0.squareRoot()), Double(min(width, height)) / 4)
+        guard radius >= 2 else { return image }
+
+        guard let output = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        let bounds = CGRect(x: 0, y: 0, width: width, height: height)
+        output.addPath(CGPath(roundedRect: bounds, cornerWidth: radius, cornerHeight: radius, transform: nil))
+        output.clip()
+        output.draw(image, in: bounds)
+        return output.makeImage()
+    }
+
     // MARK: - Composição
 
     /// Margem ao redor da janela: proporcional ao tamanho dela, com piso, para

@@ -158,6 +158,10 @@ final class ScreenCaptureService {
             let image = try await WindowCaptureComposer.compose(window, on: screen, snapshot: snapshot)
             logger.notice("Janela capturada (\(window.ownerName, privacy: .public)): \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
             return .thumbnail(image, scale: screen.backingScaleFactor)
+        case .modal(let image, let frame, let screen):
+            let composed = try await WindowCaptureComposer.composeModal(image, frame: frame, on: screen)
+            logger.notice("Modal capturada: \(composed.width, privacy: .public)×\(composed.height, privacy: .public) px.")
+            return .thumbnail(composed, scale: screen.backingScaleFactor)
         case .scroll(let rect, let screen):
             return .scroll(rect, screen: screen)
         case .text(let image, let scale):
