@@ -52,9 +52,10 @@ Aperte **Print Screen** (F13) e a tela congela para você escolher o que captura
 
 - **Área:** arraste para selecionar; a seleção pode ser movida e
   redimensionada pelas alças.
-- **Janela:** com **W**, passe o mouse sobre qualquer janela (inclusive modais
-  e a área de trabalho) e clique. A imagem sai com o papel de parede ao fundo,
-  margem e sombra, como num print de apresentação.
+- **Janela ou modal:** com **W**, passe o mouse sobre qualquer janela (ou a
+  área de trabalho) e clique. Sobre uma modal de página — o card aberto num
+  site, um diálogo do Slack — só ela acende e é capturada. A imagem sai com o
+  papel de parede ao fundo, margem e sombra, como num print de apresentação.
 - **Tela inteira:** com **F**.
 - **Editor no lugar.** Sem abrir outra janela: retângulo, elipse, seta, marca-
   texto e balão de texto, com seletor de cor e desfazer.

@@ -11,6 +11,8 @@ enum CaptureEditorResult {
     case fullScreen(CGImage, scale: CGFloat)
     /// Modo texto: o recorte, para reconhecer o texto dele.
     case text(CGImage, scale: CGFloat)
+    /// Modo janela sobre uma modal: o recorte dela, o retângulo global e o monitor.
+    case modal(CGImage, frame: CGRect, screen: NSScreen)
     /// Modo scroll: a área escolhida, em coordenadas globais, e o monitor.
     case scroll(CGRect, screen: NSScreen)
     case cancelled
@@ -47,6 +49,18 @@ final class CaptureEditorController {
         model.onExtractText = { [weak self] in self?.finishText() }
         model.onStartScroll = { [weak self] in self?.finishScroll() }
         model.onOpenColorPanel = { [weak self] in self?.openColorPanel() }
+        model.onCaptureModal = { [weak self] frame in
+            guard let self else { return }
+            let screen = self.screen(containing: frame) ?? NSScreen.main ?? NSScreen.screens[0]
+            guard
+                let editor = self.windows.first(where: { $0.screen == screen })?.editor,
+                let image = editor.frozenCrop(globalRect: frame)
+            else { return }
+            self.complete(with: .modal(image, frame: frame, screen: screen))
+        }
+        // As páginas só aparecem na acessibilidade depois de pedidas: pedir
+        // já na abertura dá tempo de a árvore ficar pronta até o mouse chegar.
+        ModalDetector.prepare(capturableWindows)
         model.onCaptureWindow = { [weak self] window in
             guard let self else { return }
             let screen = self.screen(containing: window.frame) ?? NSScreen.main ?? NSScreen.screens[0]

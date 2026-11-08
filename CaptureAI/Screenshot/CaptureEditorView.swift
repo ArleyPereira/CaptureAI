@@ -40,6 +40,11 @@ final class CaptureEditorView: NSView {
     private var draft: Annotation?
     /// Janela sob o mouse no modo janela, já em coordenadas desta view.
     private var hoveredWindow: (window: CapturableWindow, rect: CGRect)?
+    /// Modal sob o mouse dentro da janela destacada, em coordenadas globais.
+    private var hoveredModal: CGRect?
+    /// Onde a última busca de modal foi feita: a acessibilidade só é
+    /// consultada de novo quando o mouse anda de verdade.
+    private var lastModalQuery: (point: CGPoint, windowID: CGWindowID)?
     private var cursorPoint: CGPoint?
     private let toolbarHost: NSHostingView<CaptureToolbar>
 
@@ -156,8 +161,11 @@ final class CaptureEditorView: NSView {
         if let hovered = hoveredWindow {
             // A área de trabalho ocupa o monitor inteiro e não tem cantos
             // arredondados; a borda entra um pouco para não sumir na beira.
+            // Com uma modal sob o mouse, só ela acende.
             let isDesktop = hovered.window.isDesktop
-            let rect = isDesktop ? bounds.insetBy(dx: 1.5, dy: 1.5) : hovered.rect
+            let rect = isDesktop
+                ? bounds.insetBy(dx: 1.5, dy: 1.5)
+                : hoveredModal.map { viewRect(fromGlobal: $0) } ?? hovered.rect
             let radius: CGFloat = isDesktop ? 0 : 12
             let shape = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
             context.addPath(shape)
@@ -168,7 +176,7 @@ final class CaptureEditorView: NSView {
             context.setLineWidth(2.5)
             context.strokePath()
         }
-        drawHint(context, text: "Clique numa janela ou na área de trabalho  ·  W para área  ·  F para tela inteira  ·  Esc para sair")
+        drawHint(context, text: "Clique numa janela, numa modal ou na área de trabalho  ·  W para área  ·  F para tela inteira  ·  Esc para sair")
     }
 
     private static let accent = NSColor(red: 0.35, green: 0.78, blue: 0.98, alpha: 1)
@@ -287,7 +295,9 @@ final class CaptureEditorView: NSView {
 
         if model.mode == .window {
             updateHoveredWindow(at: point)
-            if let hovered = hoveredWindow {
+            if let modal = hoveredModal {
+                model.onCaptureModal(modal)
+            } else if let hovered = hoveredWindow {
                 model.onCaptureWindow(hovered.window)
             }
             return
@@ -526,6 +536,7 @@ final class CaptureEditorView: NSView {
     override func mouseExited(with event: NSEvent) {
         cursorPoint = nil
         hoveredWindow = nil
+        hoveredModal = nil
         needsDisplay = true
     }
 
@@ -540,7 +551,48 @@ final class CaptureEditorView: NSView {
             ?? (desktopTarget, bounds)
         let changed = found.0 != hoveredWindow?.window
         hoveredWindow = (window: found.0, rect: found.1)
-        if changed { needsDisplay = true }
+        let modalChanged = updateHoveredModal(at: point, in: found.0)
+        if changed || modalChanged { needsDisplay = true }
+    }
+
+    /// Procura uma modal da página no ponto. Devolve se o alvo mudou.
+    @discardableResult
+    private func updateHoveredModal(at point: CGPoint, in target: CapturableWindow) -> Bool {
+        guard !target.isDesktop else {
+            lastModalQuery = nil
+            defer { hoveredModal = nil }
+            return hoveredModal != nil
+        }
+        if let last = lastModalQuery, last.windowID == target.id,
+           hypot(last.point.x - point.x, last.point.y - point.y) < 4 {
+            return false
+        }
+        lastModalQuery = (point, target.id)
+        let previous = hoveredModal
+        hoveredModal = ModalDetector.dialogFrame(at: globalPoint(fromView: point), in: target)
+        return previous != hoveredModal
+    }
+
+    /// Ponto da view → global com origem no topo do monitor principal.
+    private func globalPoint(fromView point: CGPoint) -> CGPoint {
+        guard let screenFrame = window?.screen?.frame ?? window?.frame else { return point }
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? screenFrame.height
+        return CGPoint(x: point.x + screenFrame.minX, y: primaryHeight - (point.y + screenFrame.minY))
+    }
+
+    /// Recorta da foto congelada um retângulo global — a modal, como estava
+    /// na tela quando o atalho foi apertado.
+    func frozenCrop(globalRect: CGRect) -> CGImage? {
+        let rect = viewRect(fromGlobal: globalRect).intersection(bounds)
+        guard !rect.isEmpty else { return nil }
+        let scale = pixelScale
+        let pixelRect = CGRect(
+            x: rect.minX * scale,
+            y: (bounds.height - rect.maxY) * scale,
+            width: rect.width * scale,
+            height: rect.height * scale
+        ).integral
+        return frozen.cropping(to: pixelRect)
     }
 
     /// A área de trabalho deste monitor como alvo de captura.
@@ -576,6 +628,8 @@ final class CaptureEditorView: NSView {
         drag = nil
         draft = nil
         hoveredWindow = nil
+        hoveredModal = nil
+        lastModalQuery = nil
         layoutToolbar()
         syncWithMouse()
     }

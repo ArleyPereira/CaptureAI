@@ -43,7 +43,7 @@ struct ShortcutsSettingsView: View {
     /// O atalho de captura segurado mais W ou F.
     private var chords: some View {
         VStack(spacing: 8) {
-            chordRow(key: "W", icon: "macwindow", title: "Capturar uma janela")
+            chordRow(key: "W", icon: "macwindow", title: "Capturar uma janela ou modal")
             chordRow(key: "F", icon: "rectangle.dashed", title: "Capturar a tela inteira")
             chordRow(key: "T", icon: "text.viewfinder", title: "Copiar o texto de uma área")
             chordRow(key: "S", icon: "arrow.down.to.line", title: "Capturar com scroll")

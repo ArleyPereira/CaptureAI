@@ -95,6 +95,8 @@ struct CapturableWindow: Equatable {
     /// sistema do `CGWindowList` e do ScreenCaptureKit.
     let frame: CGRect
     let ownerName: String
+    /// Processo dono — para procurar modais dentro da janela.
+    var ownerPID: pid_t = 0
 
     /// A área de trabalho entra como uma janela a mais, a do fundo. O id 0
     /// nunca é usado por uma janela de verdade.
@@ -138,7 +140,8 @@ struct CapturableWindow: Equatable {
             return CapturableWindow(
                 id: number,
                 frame: frame,
-                ownerName: info[kCGWindowOwnerName as String] as? String ?? ""
+                ownerName: info[kCGWindowOwnerName as String] as? String ?? "",
+                ownerPID: info[kCGWindowOwnerPID as String] as? pid_t ?? 0
             )
         }
     }
@@ -473,6 +476,8 @@ final class CaptureEditorModel {
     @ObservationIgnored var onCancel: () -> Void = {}
     @ObservationIgnored var onFullScreen: () -> Void = {}
     @ObservationIgnored var onCaptureWindow: (CapturableWindow) -> Void = { _ in }
+    /// Modo janela, com o mouse sobre uma modal: o retângulo dela, global.
+    @ObservationIgnored var onCaptureModal: (CGRect) -> Void = { _ in }
     /// Modo texto: a seleção terminou e o recorte vai para o reconhecimento.
     @ObservationIgnored var onExtractText: () -> Void = {}
     /// Modo scroll: a área foi confirmada e a captura com rolagem começa.
