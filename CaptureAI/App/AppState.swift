@@ -306,6 +306,9 @@ final class AppState {
                 self?.captureCoordinator.requestFullScreen()
             }
         }
+        // A árvore das páginas precisa estar montada antes do atalho: o
+        // navegador não a monta coberto pelo editor.
+        ModalDetector.startFollowingFrontmostApp()
         captureHotkeyService.onScrollModeRequested = { [weak self] in
             Task { @MainActor in
                 self?.captureCoordinator.requestMode(.scroll)
