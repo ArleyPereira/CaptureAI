@@ -555,7 +555,12 @@ final class CaptureEditorView: NSView {
         if changed || modalChanged { needsDisplay = true }
     }
 
-    /// Procura uma modal da página no ponto. Devolve se o alvo mudou.
+    /// Uma busca de modal em curso — a seguinte espera ela terminar.
+    private var isSearchingModal = false
+
+    /// Procura uma modal da página no ponto, sem travar o editor: a resposta
+    /// chega depois e acende a modal se o mouse ainda estiver ali. Devolve se
+    /// o alvo mudou já agora (a modal anterior saiu de baixo do mouse).
     @discardableResult
     private func updateHoveredModal(at point: CGPoint, in target: CapturableWindow) -> Bool {
         guard !target.isDesktop else {
@@ -563,14 +568,60 @@ final class CaptureEditorView: NSView {
             defer { hoveredModal = nil }
             return hoveredModal != nil
         }
+        // A modal acesa continua valendo enquanto o mouse estiver sobre ela.
+        let stillInside = hoveredModal.map { viewRect(fromGlobal: $0).contains(point) } ?? false
+        var changed = false
+        if !stillInside, hoveredModal != nil {
+            hoveredModal = nil
+            changed = true
+        }
         if let last = lastModalQuery, last.windowID == target.id,
            hypot(last.point.x - point.x, last.point.y - point.y) < 4 {
-            return false
+            return changed
         }
+        guard !isSearchingModal else { return changed }
         lastModalQuery = (point, target.id)
-        let previous = hoveredModal
-        hoveredModal = ModalDetector.dialogFrame(at: globalPoint(fromView: point), in: target)
-        return previous != hoveredModal
+        isSearchingModal = true
+        ModalDetector.findDialog(at: globalPoint(fromView: point), in: target) { [weak self] frame in
+            guard let self else { return }
+            self.isSearchingModal = false
+            // O mouse pode ter ido para outra janela enquanto a resposta vinha.
+            guard self.model.mode == .window, self.hoveredWindow?.window.id == target.id else { return }
+            if let frame, let cursor = self.cursorPoint, !self.viewRect(fromGlobal: frame).contains(cursor) {
+                return
+            }
+            if self.hoveredModal != frame {
+                self.hoveredModal = frame
+                self.needsDisplay = true
+            }
+            // O mouse andou durante a busca: procura de novo no ponto atual.
+            if let cursor = self.cursorPoint, hypot(cursor.x - point.x, cursor.y - point.y) >= 4 {
+                self.updateHoveredModal(at: cursor, in: target)
+            }
+        }
+        return changed
+    }
+
+    private var modalPollTimer: Timer?
+
+    /// Repete a busca da modal no ponto atual por até 4 s, enquanto nenhuma
+    /// for achada — o tempo de o navegador publicar a página.
+    func startModalPolling() {
+        modalPollTimer?.invalidate()
+        let started = Date()
+        modalPollTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, self.window?.isVisible == true,
+                      Date().timeIntervalSince(started) < 4, self.hoveredModal == nil
+                else {
+                    timer.invalidate()
+                    return
+                }
+                guard self.model.mode == .window, self.hoveredWindow?.window.isDesktop == false else { return }
+                self.lastModalQuery = nil
+                self.syncWithMouse()
+            }
+        }
     }
 
     /// Ponto da view → global com origem no topo do monitor principal.

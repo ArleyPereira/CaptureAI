@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ParakeetFastDownloader.purgeActivePartials()
         // Arquivos criados para soltar capturas em outros apps.
         DragTemporaryFiles.removeAll()
+        // Devolve a acessibilidade das páginas como estava nos navegadores.
+        MainActor.assumeIsolated { ModalDetector.restore() }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

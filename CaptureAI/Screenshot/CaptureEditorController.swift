@@ -100,6 +100,13 @@ final class CaptureEditorController {
                 window.editor.syncWithMouse()
             }
         }
+        // O navegador leva até ~2 s para montar a árvore da página depois de
+        // `ModalDetector.prepare`. Com o mouse parado sobre a modal não
+        // haveria nova busca: o editor tenta de novo por alguns segundos, e o
+        // destaque passa da janela para a modal assim que ela aparece.
+        for window in windows {
+            window.editor.startModalPolling()
+        }
     }
 
     /// Tela inteira: a foto congelada do monitor onde está o mouse, inteira.
