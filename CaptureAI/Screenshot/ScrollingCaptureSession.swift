@@ -387,20 +387,31 @@ private final class ScrollStreamOutput: NSObject, SCStreamOutput, @unchecked Sen
         return status == .complete
     }
 
-    /// Copia o buffer para memória própria, linha a linha.
+    /// Linhas descartadas no topo e na base de cada quadro.
+    ///
+    /// O ScreenCaptureKit entrega as bordas de cima e de baixo do
+    /// `sourceRect` misturadas com o que fica fora dele (escuras). A de baixo
+    /// muda a cada quadro, então não é tomada por faixa fixa e entrava no fim
+    /// de cada trecho emendado: a imagem saía riscada por uma linha cinza a
+    /// cada emenda, e com uma faixa preta no topo.
+    static let edgeRows = 4
+
+    /// Copia o buffer para memória própria, linha a linha, sem as bordas.
     private static func copyFrame(_ pixelBuffer: CVPixelBuffer) -> ScrollFrame? {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
         let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let fullHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let edge = fullHeight > edgeRows * 8 ? edgeRows : 0
+        let height = fullHeight - edge * 2
         let sourceStride = CVPixelBufferGetBytesPerRow(pixelBuffer)
         let rowBytes = width * 4
         var data = Data(count: rowBytes * height)
         data.withUnsafeMutableBytes { destination in
             guard let target = destination.baseAddress else { return }
             for row in 0..<height {
-                memcpy(target + row * rowBytes, base + row * sourceStride, rowBytes)
+                memcpy(target + row * rowBytes, base + (row + edge) * sourceStride, rowBytes)
             }
         }
         return ScrollFrame(width: width, height: height, bytesPerRow: rowBytes, data: data)

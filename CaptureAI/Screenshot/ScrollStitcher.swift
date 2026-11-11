@@ -206,7 +206,14 @@ final class ScrollStitcher {
 
     /// Quantas linhas o conteúdo subiu de `old` para `new`, dentro da faixa
     /// que se mexe. Linhas distintas de `new` votam no deslocamento que as
-    /// leva às iguais de `old`; o mais votado é conferido linha a linha.
+    /// leva às iguais de `old`; os mais votados e os vizinhos deles são
+    /// conferidos linha a linha, e fica o que encaixa melhor.
+    ///
+    /// Não basta aceitar o primeiro que passa na conferência: numa página
+    /// com muito fundo liso, branco bate com branco em qualquer deslocamento,
+    /// e um texto antialiasado vota quase igual no certo e no vizinho. Errar
+    /// por uma linha repete (ou some com) uma linha a cada emenda, e o texto
+    /// sai com o contorno dobrado.
     static func shift(from old: [[UInt8]], to new: [[UInt8]], in moving: Range<Int>) -> Int? {
         var rowsByHash: [Int: [Int]] = [:]
         for row in moving where isDistinctive(old[row]) {
@@ -222,22 +229,56 @@ final class ScrollStitcher {
         }
 
         let minOverlap = max(16, moving.count / 10)
+        let valid = 1 ... max(1, moving.count - minOverlap)
+        // Empate desempatado pelo menor deslocamento, para não depender da
+        // ordem do dicionário.
         let ranked = votes
-            .filter { $0.key <= moving.count - minOverlap && $0.value >= 3 }
-            .sorted { $0.value > $1.value }
+            .filter { valid.contains($0.key) && $0.value >= 3 }
+            .sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
             .prefix(4)
+            .map(\.key)
 
-        for (shift, _) in ranked {
-            var compared = 0
-            var matched = 0
-            for row in moving.lowerBound ..< (moving.upperBound - shift) {
-                compared += 1
-                if rowsMatch(new[row], old[row + shift]) { matched += 1 }
-            }
-            if compared > 0, Double(matched) / Double(compared) >= 0.92 {
-                return shift
+        var candidates: [Int] = []
+        for shift in ranked {
+            for neighbor in (shift - 2) ... (shift + 2) where valid.contains(neighbor) && !candidates.contains(neighbor) {
+                candidates.append(neighbor)
             }
         }
-        return nil
+
+        var best: (shift: Int, distance: Double)?
+        for shift in candidates {
+            guard let distance = fit(shift, old: old, new: new, in: moving) else { continue }
+            if best == nil || distance < best!.distance {
+                best = (shift, distance)
+            }
+        }
+        return best?.shift
+    }
+
+    /// Quão bem `new` encaixa em `old` subido de `shift` linhas: a diferença
+    /// média nas linhas com conteúdo, ou nil se o encaixe não se sustenta.
+    private static func fit(_ shift: Int, old: [[UInt8]], new: [[UInt8]], in moving: Range<Int>) -> Double? {
+        var compared = 0
+        var matched = 0
+        var distinctive = 0
+        var total = 0
+        var samples = 0
+        for row in moving.lowerBound ..< (moving.upperBound - shift) {
+            let a = new[row]
+            let b = old[row + shift]
+            compared += 1
+            if rowsMatch(a, b) { matched += 1 }
+            // Só as linhas com conteúdo dizem qual deslocamento é o certo:
+            // as lisas dão diferença zero em qualquer um.
+            if isDistinctive(a) || isDistinctive(b) {
+                distinctive += 1
+                for index in 0 ..< min(a.count, b.count) {
+                    total += abs(Int(a[index]) - Int(b[index]))
+                }
+                samples += min(a.count, b.count)
+            }
+        }
+        guard compared > 0, distinctive >= 3, Double(matched) / Double(compared) >= 0.92 else { return nil }
+        return Double(total) / Double(max(1, samples))
     }
 }
