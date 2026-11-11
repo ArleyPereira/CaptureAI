@@ -479,16 +479,26 @@ private final class ScrollPreviewView: NSView {
         let scale = min(bounds.width / size.width, bounds.height / size.height)
         let drawWidth = size.width * scale
         let originX = (bounds.width - drawWidth) / 2
-        var y: CGFloat = 0
+        // Encolhidas, as partes (muitas vezes de poucos pixels) caem em
+        // frações de pixel: com suavização, a borda de cada uma fica
+        // meio transparente e o fundo escuro vaza, uma linha por emenda.
+        // Cada parte vai de um pixel inteiro ao seguinte, encostada na
+        // anterior, e sem suavização na borda.
+        let pixels = window?.backingScaleFactor ?? 2
+        func snap(_ value: CGFloat) -> CGFloat { (value * pixels).rounded() / pixels }
+        context.setShouldAntialias(false)
+        var accumulated: CGFloat = 0
         for strip in strips {
-            let height = CGFloat(strip.height) * scale
+            let top = snap(accumulated * scale)
+            accumulated += CGFloat(strip.height)
+            let bottom = snap(accumulated * scale)
+            guard bottom > top else { continue }
             // A view é invertida; a imagem não: desenha cada parte desvirada.
             context.saveGState()
-            context.translateBy(x: originX, y: y + height)
+            context.translateBy(x: originX, y: bottom)
             context.scaleBy(x: 1, y: -1)
-            context.draw(strip, in: CGRect(x: 0, y: 0, width: drawWidth, height: height))
+            context.draw(strip, in: CGRect(x: 0, y: 0, width: drawWidth, height: bottom - top))
             context.restoreGState()
-            y += height
         }
         context.restoreGState()
 
