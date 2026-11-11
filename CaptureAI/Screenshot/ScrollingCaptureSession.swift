@@ -252,11 +252,14 @@ final class ScrollingCaptureSession: NSObject {
 
         // Centralizada logo acima da área; dentro dela, no alto, se não couber.
         let visible = screen.frame
-        var origin = CGPoint(x: rect.midX - size.width / 2, y: rect.maxY + 10)
-        if origin.y + size.height > visible.maxY - 4 {
-            origin.y = rect.maxY - size.height - 10
+        // O painel ganhou a margem da sombra em volta (antes, 4 pt): as
+        // pílulas ficam no mesmo lugar de antes.
+        let inset = ScrollPill.shadowInset - 4
+        var origin = CGPoint(x: rect.midX - size.width / 2, y: rect.maxY + 10 - inset)
+        if origin.y + size.height - inset > visible.maxY - 4 {
+            origin.y = rect.maxY - size.height - 10 + inset
         }
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
+        origin.x = min(max(origin.x, visible.minX + 8 - inset), visible.maxX - size.width - 8 + inset)
         panel.setFrameOrigin(origin)
         panel.makeKeyAndOrderFront(nil)
         controlsPanel = panel
@@ -296,7 +299,7 @@ final class ScrollingCaptureSession: NSObject {
         }
         let size = hosting.fittingSize
         panel.setFrame(
-            NSRect(x: rect.midX - size.width / 2, y: rect.maxY - size.height - 8, width: size.width, height: size.height),
+            NSRect(x: rect.midX - size.width / 2, y: rect.maxY - size.height - 8 + (ScrollPill.shadowInset - 4), width: size.width, height: size.height),
             display: true
         )
         panel.orderFrontRegardless()
@@ -541,7 +544,7 @@ private struct ScrollingControlsView: View {
             ScrollPill(icon: "xmark", title: "Cancelar", style: .dark, help: "Cancelar (Esc)") { state.onCancel() }
             ScrollPill(icon: "checkmark", title: "Concluir", style: .accent, help: "Concluir (Enter)") { state.onFinish() }
         }
-        .padding(4)
+        .padding(ScrollPill.shadowInset)
         .environment(\.colorScheme, .dark)
         .fixedSize()
     }
@@ -558,7 +561,7 @@ private struct AutoScrollPillView: View {
             style: state.isAutoScrolling ? .active : .dark,
             help: "Rola sozinho até o fim do conteúdo"
         ) { state.onToggleAutoScroll() }
-        .padding(4)
+        .padding(ScrollPill.shadowInset)
         .environment(\.colorScheme, .dark)
         .fixedSize()
     }
@@ -567,6 +570,11 @@ private struct AutoScrollPillView: View {
 /// Pílula dos controles da captura com scroll.
 private struct ScrollPill: View {
     enum Style { case dark, active, accent }
+
+    /// Margem em volta das pílulas, dentro do painel: a sombra (raio 8,
+    /// 3 pt para baixo) precisa caber nela, ou o painel a corta rente e
+    /// sobra um retângulo em volta do botão.
+    static let shadowInset: CGFloat = 14
 
     let icon: String
     let title: String
