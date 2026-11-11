@@ -252,11 +252,14 @@ final class ScrollingCaptureSession: NSObject {
 
         // Centralizada logo acima da área; dentro dela, no alto, se não couber.
         let visible = screen.frame
-        var origin = CGPoint(x: rect.midX - size.width / 2, y: rect.maxY + 10)
-        if origin.y + size.height > visible.maxY - 4 {
-            origin.y = rect.maxY - size.height - 10
+        // O painel ganhou a margem da sombra em volta (antes, 4 pt): as
+        // pílulas ficam no mesmo lugar de antes.
+        let inset = ScrollPill.shadowInset - 4
+        var origin = CGPoint(x: rect.midX - size.width / 2, y: rect.maxY + 10 - inset)
+        if origin.y + size.height - inset > visible.maxY - 4 {
+            origin.y = rect.maxY - size.height - 10 + inset
         }
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
+        origin.x = min(max(origin.x, visible.minX + 8 - inset), visible.maxX - size.width - 8 + inset)
         panel.setFrameOrigin(origin)
         panel.makeKeyAndOrderFront(nil)
         controlsPanel = panel
@@ -296,7 +299,7 @@ final class ScrollingCaptureSession: NSObject {
         }
         let size = hosting.fittingSize
         panel.setFrame(
-            NSRect(x: rect.midX - size.width / 2, y: rect.maxY - size.height - 8, width: size.width, height: size.height),
+            NSRect(x: rect.midX - size.width / 2, y: rect.maxY - size.height - 8 + (ScrollPill.shadowInset - 4), width: size.width, height: size.height),
             display: true
         )
         panel.orderFrontRegardless()
@@ -387,20 +390,31 @@ private final class ScrollStreamOutput: NSObject, SCStreamOutput, @unchecked Sen
         return status == .complete
     }
 
-    /// Copia o buffer para memória própria, linha a linha.
+    /// Linhas descartadas no topo e na base de cada quadro.
+    ///
+    /// O ScreenCaptureKit entrega as bordas de cima e de baixo do
+    /// `sourceRect` misturadas com o que fica fora dele (escuras). A de baixo
+    /// muda a cada quadro, então não é tomada por faixa fixa e entrava no fim
+    /// de cada trecho emendado: a imagem saía riscada por uma linha cinza a
+    /// cada emenda, e com uma faixa preta no topo.
+    static let edgeRows = 4
+
+    /// Copia o buffer para memória própria, linha a linha, sem as bordas.
     private static func copyFrame(_ pixelBuffer: CVPixelBuffer) -> ScrollFrame? {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
         let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let fullHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let edge = fullHeight > edgeRows * 8 ? edgeRows : 0
+        let height = fullHeight - edge * 2
         let sourceStride = CVPixelBufferGetBytesPerRow(pixelBuffer)
         let rowBytes = width * 4
         var data = Data(count: rowBytes * height)
         data.withUnsafeMutableBytes { destination in
             guard let target = destination.baseAddress else { return }
             for row in 0..<height {
-                memcpy(target + row * rowBytes, base + row * sourceStride, rowBytes)
+                memcpy(target + row * rowBytes, base + (row + edge) * sourceStride, rowBytes)
             }
         }
         return ScrollFrame(width: width, height: height, bytesPerRow: rowBytes, data: data)
@@ -468,16 +482,26 @@ private final class ScrollPreviewView: NSView {
         let scale = min(bounds.width / size.width, bounds.height / size.height)
         let drawWidth = size.width * scale
         let originX = (bounds.width - drawWidth) / 2
-        var y: CGFloat = 0
+        // Encolhidas, as partes (muitas vezes de poucos pixels) caem em
+        // frações de pixel: com suavização, a borda de cada uma fica
+        // meio transparente e o fundo escuro vaza, uma linha por emenda.
+        // Cada parte vai de um pixel inteiro ao seguinte, encostada na
+        // anterior, e sem suavização na borda.
+        let pixels = window?.backingScaleFactor ?? 2
+        func snap(_ value: CGFloat) -> CGFloat { (value * pixels).rounded() / pixels }
+        context.setShouldAntialias(false)
+        var accumulated: CGFloat = 0
         for strip in strips {
-            let height = CGFloat(strip.height) * scale
+            let top = snap(accumulated * scale)
+            accumulated += CGFloat(strip.height)
+            let bottom = snap(accumulated * scale)
+            guard bottom > top else { continue }
             // A view é invertida; a imagem não: desenha cada parte desvirada.
             context.saveGState()
-            context.translateBy(x: originX, y: y + height)
+            context.translateBy(x: originX, y: bottom)
             context.scaleBy(x: 1, y: -1)
-            context.draw(strip, in: CGRect(x: 0, y: 0, width: drawWidth, height: height))
+            context.draw(strip, in: CGRect(x: 0, y: 0, width: drawWidth, height: bottom - top))
             context.restoreGState()
-            y += height
         }
         context.restoreGState()
 
@@ -520,7 +544,7 @@ private struct ScrollingControlsView: View {
             ScrollPill(icon: "xmark", title: "Cancelar", style: .dark, help: "Cancelar (Esc)") { state.onCancel() }
             ScrollPill(icon: "checkmark", title: "Concluir", style: .accent, help: "Concluir (Enter)") { state.onFinish() }
         }
-        .padding(4)
+        .padding(ScrollPill.shadowInset)
         .environment(\.colorScheme, .dark)
         .fixedSize()
     }
@@ -537,7 +561,7 @@ private struct AutoScrollPillView: View {
             style: state.isAutoScrolling ? .active : .dark,
             help: "Rola sozinho até o fim do conteúdo"
         ) { state.onToggleAutoScroll() }
-        .padding(4)
+        .padding(ScrollPill.shadowInset)
         .environment(\.colorScheme, .dark)
         .fixedSize()
     }
@@ -546,6 +570,11 @@ private struct AutoScrollPillView: View {
 /// Pílula dos controles da captura com scroll.
 private struct ScrollPill: View {
     enum Style { case dark, active, accent }
+
+    /// Margem em volta das pílulas, dentro do painel: a sombra (raio 8,
+    /// 3 pt para baixo) precisa caber nela, ou o painel a corta rente e
+    /// sobra um retângulo em volta do botão.
+    static let shadowInset: CGFloat = 14
 
     let icon: String
     let title: String
