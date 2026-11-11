@@ -101,7 +101,7 @@ final class ScrollStitcher {
         }
         // A base fixa só vale a partir do primeiro encaixe: antes dele não dá
         // para distinguir uma barra fixa de conteúdo que ainda não se mexeu.
-        let band = bottomBand ?? bottom
+        var band = bottomBand ?? bottom
         let moving = top ..< (height - band)
         guard moving.count > 32 else { return .noMatch }
 
@@ -110,6 +110,7 @@ final class ScrollStitcher {
         }
 
         if bottomBand == nil {
+            band += Self.overlayRows(at: moving, shift: shift, old: referenceSignature, new: signature)
             bottomBand = band
             // A primeira parte levava a base fixa junto; ela volta só no fim.
             if band > 0, let trimmed = reference.image(rows: 0 ..< (height - band)) {
@@ -118,7 +119,9 @@ final class ScrollStitcher {
             }
         }
 
-        let newRows = (moving.upperBound - shift) ..< moving.upperBound
+        let end = height - band
+        guard end - shift >= top else { return .noMatch }
+        let newRows = (end - shift) ..< end
         let allowed = min(newRows.count, maxHeight - stitchedHeight)
         guard allowed > 0, let strip = frame.image(rows: newRows.lowerBound ..< (newRows.lowerBound + allowed)) else {
             return .limitReached
@@ -176,6 +179,35 @@ final class ScrollStitcher {
                 }
             }
         }
+    }
+
+    /// Linhas no pé da faixa que se mexe que não acompanham a rolagem.
+    ///
+    /// A borda translúcida da janela, a sombra de uma barra fixa ou um
+    /// contorno antialiasado ficam parados, mas por cima do conteúdo: mudam
+    /// a cada quadro, então não entram na base fixa, e eram justamente as
+    /// linhas acrescentadas a cada emenda — a imagem saía riscada por uma
+    /// linha cinza por trecho. Conteúdo de verdade reaparece `shift` linhas
+    /// acima no quadro seguinte; o que não reaparece é sobreposição e passa
+    /// a contar como base fixa.
+    static func overlayRows(at moving: Range<Int>, shift: Int, old: [[UInt8]], new: [[UInt8]]) -> Int {
+        let floor = max(moving.lowerBound + shift, moving.upperBound - 48)
+        var lastMismatch: Int?
+        var streak = 0
+        var row = moving.upperBound - 1
+        while row >= floor {
+            if rowsMatch(old[row], new[row - shift]) {
+                streak += 1
+                if streak >= 6 { break }
+            } else {
+                lastMismatch = row
+                streak = 0
+            }
+            row -= 1
+        }
+        guard let lastMismatch else { return 0 }
+        // Uma linha a mais de folga para o antialiasing em volta.
+        return moving.upperBound - lastMismatch + 1
     }
 
     private static func rowsMatch(_ a: [UInt8], _ b: [UInt8]) -> Bool {
