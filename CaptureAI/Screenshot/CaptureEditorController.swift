@@ -120,7 +120,8 @@ final class CaptureEditorController {
 
     /// Troca de modo vinda de fora — o W ou o T segurado junto com o atalho.
     func setMode(_ mode: CaptureMode) {
-        guard isPresenting else { return }
+        // Como no teclado do editor: com uma área já marcada, fica o modo dela.
+        guard isPresenting, !windows.contains(where: { $0.editor.selection != nil }) else { return }
         model.setMode(mode)
     }
 
