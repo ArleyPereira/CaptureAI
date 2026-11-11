@@ -256,6 +256,13 @@ final class CaptureEditorView: NSView {
             return
         }
         let size = toolbarHost.fittingSize
+        // Escondida, a barra SwiftUI pode ainda não ter trocado de conteúdo
+        // (a de anotação pelo botão do modo scroll, por exemplo) e medir o
+        // tamanho antigo. Confere no próximo ciclo e reposiciona se mudou.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.toolbarHost.isHidden, self.toolbarHost.fittingSize != size else { return }
+            self.layoutToolbar()
+        }
         let gap: CGFloat = 10
         if model.mode == .scroll {
             // O botão de começar fica centralizado logo acima da área; dentro
@@ -808,9 +815,16 @@ final class CaptureEditorView: NSView {
         }
     }
 
+    /// S, W, T e F: as letras que escolhem o modo.
+    private static let modeKeys: Set<UInt16> = [1, 13, 17, 3]
+
     override func keyDown(with event: NSEvent) {
         // Ctrl+letra nem sempre passa por `performKeyEquivalent`.
         if handleShortcut(event) { return }
+        // O modo se escolhe antes de selecionar. Com a área já marcada as
+        // letras não trocam mais: a troca apagava as anotações sem aviso e
+        // deixava a barra do modo anterior no lugar. Para mudar, Esc.
+        if Self.modeKeys.contains(event.keyCode), selection != nil { return }
         switch event.keyCode {
         case 53: model.onCancel()                       // Esc
         case 36, 76:                                    // Enter
