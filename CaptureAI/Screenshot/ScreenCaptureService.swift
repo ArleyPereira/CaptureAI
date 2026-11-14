@@ -92,7 +92,7 @@ final class ScreenCaptureService {
         /// Recorte do modo texto, para reconhecer o texto.
         case text(CGImage, scale: CGFloat)
         /// Área do modo scroll, para a captura com rolagem.
-        case scroll(CGRect, screen: NSScreen)
+        case scroll(CGRect, screen: NSScreen, style: ScrollCaptureStyle)
         case cancelled
     }
 
@@ -162,8 +162,8 @@ final class ScreenCaptureService {
             let composed = try await WindowCaptureComposer.composeModal(image, frame: frame, on: screen)
             logger.notice("Modal capturada: \(composed.width, privacy: .public)×\(composed.height, privacy: .public) px.")
             return .thumbnail(composed, scale: screen.backingScaleFactor)
-        case .scroll(let rect, let screen):
-            return .scroll(rect, screen: screen)
+        case .scroll(let rect, let screen, let style):
+            return .scroll(rect, screen: screen, style: style)
         case .text(let image, let scale):
             logger.notice("Recorte para texto: \(image.width, privacy: .public)×\(image.height, privacy: .public) px.")
             return .text(image, scale: scale)

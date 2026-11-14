@@ -50,8 +50,8 @@ final class ScreenCaptureCoordinator {
                 showThumbnail(image, scale: scale)
             case .text(let image, let scale):
                 textPanel.show(image, scale: scale)
-            case .scroll(let rect, let screen):
-                startScrollingCapture(rect, on: screen)
+            case .scroll(let rect, let screen, let style):
+                startScrollingCapture(rect, on: screen, style: style)
             }
         } catch {
             logger.error("Captura falhou: \(error.localizedDescription, privacy: .public)")
@@ -132,11 +132,28 @@ final class ScreenCaptureCoordinator {
 
     /// Captura com scroll: grava a área enquanto a pessoa rola e entrega a
     /// imagem emendada na miniatura, como as capturas de janela.
-    private func startScrollingCapture(_ rect: CGRect, on screen: NSScreen) {
-        let session = ScrollingCaptureSession(rect: rect, screen: screen) { [weak self] image, scale in
+    private func startScrollingCapture(_ rect: CGRect, on screen: NSScreen, style: ScrollCaptureStyle) {
+        let session = ScrollingCaptureSession(rect: rect, screen: screen, keepsSides: style != .area) { [weak self] image, scale in
             guard let self else { return }
             self.scrollingSession = nil
-            if let image { self.showThumbnail(image, scale: scale) }
+            guard let image else { return }
+            guard style != .area else {
+                self.showThumbnail(image, scale: scale)
+                return
+            }
+            // Janela ou modal: sai como as capturas de janela, com cantos
+            // arredondados, sombra e o papel de parede atrás.
+            Task {
+                let primaryHeight = NSScreen.screens.first?.frame.maxY ?? screen.frame.maxY
+                let frame = CGRect(
+                    x: rect.minX,
+                    y: primaryHeight - rect.maxY,
+                    width: CGFloat(image.width) / scale,
+                    height: CGFloat(image.height) / scale
+                )
+                let composed = (try? await WindowCaptureComposer.composeModal(image, frame: frame, on: screen)) ?? image
+                self.showThumbnail(composed, scale: scale)
+            }
         }
         scrollingSession = session
         Task {

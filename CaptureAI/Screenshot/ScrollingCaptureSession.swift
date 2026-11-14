@@ -57,11 +57,11 @@ final class ScrollingCaptureSession: NSObject {
     /// - Parameters:
     ///   - rect: a área, em coordenadas globais do Cocoa (origem embaixo).
     ///   - screen: o monitor onde ela está.
-    init(rect: CGRect, screen: NSScreen, completion: @escaping (CGImage?, CGFloat) -> Void) {
+    init(rect: CGRect, screen: NSScreen, keepsSides: Bool = false, completion: @escaping (CGImage?, CGFloat) -> Void) {
         self.rect = rect.integral
         self.screen = screen
         self.completion = completion
-        self.output = ScrollStreamOutput()
+        self.output = ScrollStreamOutput(keepsSides: keepsSides)
         super.init()
     }
 
@@ -347,6 +347,16 @@ final class ScrollingCaptureSession: NSObject {
     }
 }
 
+/// De onde veio a captura com rolagem.
+enum ScrollCaptureStyle: Sendable {
+    /// Uma área livre: a imagem é só o que rola.
+    case area
+    /// A janela destacada no modo janela: sai com a moldura inteira.
+    case window
+    /// A modal destacada no modo janela: sai com a moldura inteira.
+    case modal
+}
+
 // MARK: - Recebimento dos quadros
 
 /// Recebe os quadros da gravação e emenda numa fila à parte.
@@ -360,7 +370,11 @@ private final class ScrollStreamOutput: NSObject, SCStreamOutput, @unchecked Sen
     let queue = DispatchQueue(label: "dev.arley.santana.CaptureAI.scrolling", qos: .userInitiated)
     private let stitchQueue = DispatchQueue(label: "dev.arley.santana.CaptureAI.stitching", qos: .userInitiated)
     let maxHeight = 30_000
-    private lazy var stitcher = ScrollStitcher(maxHeight: maxHeight)
+    private let stitcher: ScrollStitcher
+
+    init(keepsSides: Bool) {
+        stitcher = ScrollStitcher(maxHeight: 30_000, keepsSides: keepsSides)
+    }
 
     private let lock = NSLock()
     private var pending: ScrollFrame?

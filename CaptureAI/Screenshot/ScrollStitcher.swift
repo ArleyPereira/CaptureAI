@@ -47,6 +47,44 @@ struct ScrollFrame: Sendable {
         }
         return ScrollFrame(width: range.count, height: height, bytesPerRow: rowBytes, data: cropped)
     }
+
+    /// As linhas `range` com as colunas fora de `content` trocadas por
+    /// `left` e `right` (os pixels de uma linha de fundo das laterais).
+    func image(rows range: Range<Int>, keeping content: Range<Int>, left: Data, right: Data) -> CGImage? {
+        let rows = range.clamped(to: 0..<height)
+        guard !rows.isEmpty else { return nil }
+        var slice = data.subdata(in: rows.lowerBound * bytesPerRow ..< rows.upperBound * bytesPerRow)
+        slice.withUnsafeMutableBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            left.withUnsafeBytes { leftBytes in
+                right.withUnsafeBytes { rightBytes in
+                    for row in 0..<rows.count {
+                        let line = base + row * bytesPerRow
+                        if let source = leftBytes.baseAddress, !left.isEmpty {
+                            memcpy(line, source, left.count)
+                        }
+                        if let source = rightBytes.baseAddress, !right.isEmpty {
+                            memcpy(line + content.upperBound * 4, source, right.count)
+                        }
+                    }
+                }
+            }
+        }
+        guard let provider = CGDataProvider(data: slice as CFData) else { return nil }
+        return CGImage(
+            width: width,
+            height: rows.count,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )
+    }
 }
 
 /// Emenda os quadros de uma rolagem numa imagem só.
@@ -89,8 +127,58 @@ final class ScrollStitcher {
     /// no primeiro quadro que muda.
     private var contentColumns: Range<Int>?
 
-    init(maxHeight: Int = 30_000) {
+    /// Mantém as laterais paradas na imagem, em vez de cortá-las: a captura
+    /// com rolagem de uma janela ou modal sai com a moldura inteira em volta
+    /// do conteúdo esticado.
+    let keepsSides: Bool
+    /// O quadro de referência com as laterais, quando elas são mantidas.
+    private var referenceFull: ScrollFrame?
+    /// Os pixels de uma linha de fundo de cada lateral, repetidos ao lado de
+    /// cada trecho novo: a lateral se estende lisa enquanto o conteúdo cresce.
+    private var leftFill = Data()
+    private var rightFill = Data()
+
+    init(maxHeight: Int = 30_000, keepsSides: Bool = false) {
         self.maxHeight = maxHeight
+        self.keepsSides = keepsSides
+    }
+
+    /// Linhas de um quadro como imagem: só o conteúdo, ou com as laterais
+    /// (as do próprio quadro, ou estendidas com o fundo delas).
+    private func image(rows: Range<Int>, of frame: ScrollFrame, full: ScrollFrame?, extendingSides: Bool) -> CGImage? {
+        guard keepsSides, let full, let columns = contentColumns, columns != 0 ..< full.width else {
+            return frame.image(rows: rows)
+        }
+        guard extendingSides else { return full.image(rows: rows) }
+        return full.image(rows: rows, keeping: columns, left: leftFill, right: rightFill)
+    }
+
+    /// Escolhe, na metade de baixo, a linha mais lisa das laterais.
+    private func prepareSideFill(from frame: ScrollFrame, content: Range<Int>) {
+        var bestRow = frame.height - 1
+        var bestRange = Int.max
+        frame.data.withUnsafeBytes { raw in
+            guard let bytes = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            var row = frame.height - 2
+            while row >= frame.height / 2 {
+                let line = bytes + row * frame.bytesPerRow
+                var low = 255, high = 0
+                for x in stride(from: 0, to: frame.width, by: 4) where !content.contains(x) {
+                    let value = Int(line[x * 4 + 1])
+                    if value < low { low = value }
+                    if value > high { high = value }
+                }
+                if high - low < bestRange {
+                    bestRange = high - low
+                    bestRow = row
+                    if bestRange == 0 { break }
+                }
+                row -= 1
+            }
+        }
+        let start = bestRow * frame.bytesPerRow
+        leftFill = frame.data.subdata(in: start ..< start + content.lowerBound * 4)
+        rightFill = frame.data.subdata(in: start + content.upperBound * 4 ..< start + frame.width * 4)
     }
 
     var isEmpty: Bool { strips.isEmpty }
@@ -101,6 +189,7 @@ final class ScrollStitcher {
             guard frame.width >= columns.upperBound else { return .noMatch }
             if columns != 0 ..< frame.width { frame = frame.columns(columns) }
         } else if var first = reference, first.width == frame.width, first.height == frame.height {
+            let firstFull = first
             // Primeiro quadro diferente do inicial: é aqui que se vê o que se
             // mexe. Colunas paradas nas laterais (a barra lateral de um app,
             // um índice ao lado do texto) não acompanham a rolagem: ficam de
@@ -109,9 +198,10 @@ final class ScrollStitcher {
             guard let columns = Self.contentColumns(from: first, to: frame) else { return .unchanged }
             contentColumns = columns
             if columns != 0 ..< frame.width {
+                if keepsSides { prepareSideFill(from: firstFull, content: columns) }
                 first = first.columns(columns)
                 frame = frame.columns(columns)
-                if let image = first.image(rows: 0 ..< first.height) {
+                if !keepsSides, let image = first.image(rows: 0 ..< first.height) {
                     strips = [image]
                     stitchedHeight = first.height
                 }
@@ -126,6 +216,7 @@ final class ScrollStitcher {
             strips = [first]
             stitchedHeight = frame.height
             self.reference = frame
+            referenceFull = incoming
             referenceSignature = signature
             return .started
         }
@@ -155,7 +246,7 @@ final class ScrollStitcher {
             band += Self.overlayRows(at: moving, shift: shift, old: referenceSignature, new: signature)
             bottomBand = band
             // A primeira parte levava a base fixa junto; ela volta só no fim.
-            if band > 0, let trimmed = reference.image(rows: 0 ..< (height - band)) {
+            if band > 0, let trimmed = image(rows: 0 ..< (height - band), of: reference, full: referenceFull, extendingSides: false) {
                 strips[0] = trimmed
                 stitchedHeight = height - band
             }
@@ -165,12 +256,15 @@ final class ScrollStitcher {
         guard end - shift >= top else { return .noMatch }
         let newRows = (end - shift) ..< end
         let allowed = min(newRows.count, maxHeight - stitchedHeight)
-        guard allowed > 0, let strip = frame.image(rows: newRows.lowerBound ..< (newRows.lowerBound + allowed)) else {
+        guard allowed > 0,
+              let strip = image(rows: newRows.lowerBound ..< (newRows.lowerBound + allowed), of: frame, full: incoming, extendingSides: true)
+        else {
             return .limitReached
         }
         strips.append(strip)
         stitchedHeight += allowed
         self.reference = frame
+        referenceFull = incoming
         referenceSignature = signature
         return allowed < newRows.count ? .limitReached : .appended(rows: allowed)
     }
@@ -179,7 +273,8 @@ final class ScrollStitcher {
     func makeImage() -> CGImage? {
         guard let reference, let first = strips.first else { return nil }
         var parts = strips
-        if let band = bottomBand, band > 0, let base = reference.image(rows: (reference.height - band) ..< reference.height) {
+        if let band = bottomBand, band > 0,
+           let base = image(rows: (reference.height - band) ..< reference.height, of: reference, full: referenceFull, extendingSides: false) {
             parts.append(base)
         }
         let width = first.width
@@ -244,6 +339,25 @@ final class ScrollStitcher {
         if let edge = (0 ..< first).last(where: { busy[$0] }) { left = edge + 1 }
         var right = width
         if let edge = (last + 1 ..< width).first(where: { busy[$0] }) { right = edge }
+
+        // A amostra de linhas pode pular um detalhe fino da lateral (a ponta
+        // de uma letra): a faixa lisa entre a lateral e o conteúdo é
+        // conferida linha a linha antes de entrar.
+        old.data.withUnsafeBytes { raw in
+            guard let bytes = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            func isBusy(_ x: Int) -> Bool {
+                var low = 255, high = 0
+                for row in 0..<old.height {
+                    let value = Int(bytes[row * old.bytesPerRow + x * 4 + 1])
+                    if value < low { low = value }
+                    if value > high { high = value }
+                    if high - low > 24 { return true }
+                }
+                return false
+            }
+            if let edge = (left ..< first).last(where: isBusy) { left = edge + 1 }
+            if last + 1 < right, let edge = (last + 1 ..< right).first(where: isBusy) { right = edge }
+        }
         guard right - left >= 64 else { return 0 ..< width }
         return left ..< right
     }

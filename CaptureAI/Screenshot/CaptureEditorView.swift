@@ -176,7 +176,7 @@ final class CaptureEditorView: NSView {
             context.setLineWidth(2.5)
             context.strokePath()
         }
-        drawHint(context, text: "Clique numa janela, numa modal ou na área de trabalho  ·  W para área  ·  F para tela inteira  ·  Esc para sair")
+        drawHint(context, text: "Clique numa janela, numa modal ou na área de trabalho  ·  S para capturar com rolagem  ·  W para área  ·  F para tela inteira  ·  Esc para sair")
     }
 
     private static let accent = NSColor(red: 0.35, green: 0.78, blue: 0.98, alpha: 1)
@@ -815,6 +815,22 @@ final class CaptureEditorView: NSView {
         }
     }
 
+    /// Inicia a captura com rolagem da modal ou da janela sob o mouse.
+    private func startScrollOnHovered() -> Bool {
+        let target: (rect: CGRect, style: ScrollCaptureStyle)
+        if let modal = hoveredModal {
+            target = (viewRect(fromGlobal: modal), .modal)
+        } else if let hovered = hoveredWindow, !hovered.window.isDesktop {
+            target = (hovered.rect, .window)
+        } else {
+            return false
+        }
+        guard let window else { return false }
+        let global = window.convertToScreen(convert(target.rect, to: nil))
+        model.onStartWindowScroll(global, target.style)
+        return true
+    }
+
     /// S, W, T e F: as letras que escolhem o modo.
     private static let modeKeys: Set<UInt16> = [1, 13, 17, 3]
 
@@ -825,6 +841,9 @@ final class CaptureEditorView: NSView {
         // letras não trocam mais: a troca apagava as anotações sem aviso e
         // deixava a barra do modo anterior no lugar. Para mudar, Esc.
         if Self.modeKeys.contains(event.keyCode), selection != nil { return }
+        // Modo janela: S sobre a janela ou a modal destacada rola ela, em vez
+        // de trocar para o modo scroll.
+        if event.keyCode == 1, model.mode == .window, startScrollOnHovered() { return }
         switch event.keyCode {
         case 53: model.onCancel()                       // Esc
         case 36, 76:                                    // Enter
