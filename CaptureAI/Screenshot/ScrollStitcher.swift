@@ -31,6 +31,21 @@ struct ScrollFrame: Sendable {
             intent: .defaultIntent
         )
     }
+
+    /// Só as colunas `range`, como quadro independente.
+    func columns(_ range: Range<Int>) -> ScrollFrame {
+        let rowBytes = range.count * 4
+        var cropped = Data(count: rowBytes * height)
+        cropped.withUnsafeMutableBytes { destination in
+            data.withUnsafeBytes { source in
+                guard let target = destination.baseAddress, let base = source.baseAddress else { return }
+                for row in 0..<height {
+                    memcpy(target + row * rowBytes, base + row * bytesPerRow + range.lowerBound * 4, rowBytes)
+                }
+            }
+        }
+        return ScrollFrame(width: range.count, height: height, bytesPerRow: rowBytes, data: cropped)
+    }
 }
 
 /// Emenda os quadros de uma rolagem numa imagem só.
@@ -69,6 +84,9 @@ final class ScrollStitcher {
     private var referenceSignature: [[UInt8]] = []
     /// Linhas fixas na base, descobertas no primeiro encaixe.
     private var bottomBand: Int?
+    /// As colunas que entram na imagem, sem as laterais paradas; decididas
+    /// no primeiro quadro que muda.
+    private var contentColumns: Range<Int>?
 
     init(maxHeight: Int = 30_000) {
         self.maxHeight = maxHeight
@@ -76,7 +94,30 @@ final class ScrollStitcher {
 
     var isEmpty: Bool { strips.isEmpty }
 
-    func add(_ frame: ScrollFrame) -> Step {
+    func add(_ incoming: ScrollFrame) -> Step {
+        var frame = incoming
+        if let columns = contentColumns {
+            guard frame.width >= columns.upperBound else { return .noMatch }
+            if columns != 0 ..< frame.width { frame = frame.columns(columns) }
+        } else if var first = reference, first.width == frame.width, first.height == frame.height {
+            // Primeiro quadro diferente do inicial: é aqui que se vê o que se
+            // mexe. Colunas paradas nas laterais (a barra lateral de um app,
+            // um índice ao lado do texto) não acompanham a rolagem: ficam de
+            // fora da imagem, ou nenhuma linha encaixaria na do quadro
+            // anterior.
+            guard let columns = Self.contentColumns(from: first, to: frame) else { return .unchanged }
+            contentColumns = columns
+            if columns != 0 ..< frame.width {
+                first = first.columns(columns)
+                frame = frame.columns(columns)
+                if let image = first.image(rows: 0 ..< first.height) {
+                    strips = [image]
+                    stitchedHeight = first.height
+                }
+                reference = first
+                referenceSignature = Self.signature(of: first)
+            }
+        }
         let signature = Self.signature(of: frame)
 
         guard let reference else {
@@ -158,6 +199,52 @@ final class ScrollStitcher {
             context.draw(part, in: CGRect(x: 0, y: y, width: part.width, height: part.height))
         }
         return context.makeImage()
+    }
+
+    // MARK: - Colunas
+
+    /// As colunas a manter entre dois quadros: da primeira à última que se
+    /// mexe, mais as margens lisas em volta. Uma lateral parada com conteúdo
+    /// (texto, ícones) fica de fora; uma margem lisa parada fica, para o
+    /// conteúdo não perder o respiro. Nil quando ainda não há rolagem: só um
+    /// cursor piscando ou um ícone animado não decidem nada.
+    static func contentColumns(from old: ScrollFrame, to new: ScrollFrame) -> Range<Int>? {
+        let width = old.width
+        let rowStep = max(1, old.height / 400)
+        var moving = [Bool](repeating: false, count: width)
+        var busy = [Bool](repeating: false, count: width)
+        old.data.withUnsafeBytes { oldRaw in
+            new.data.withUnsafeBytes { newRaw in
+                let a = oldRaw.bindMemory(to: UInt8.self)
+                let b = newRaw.bindMemory(to: UInt8.self)
+                func luminance(_ bytes: UnsafeBufferPointer<UInt8>, _ index: Int) -> Int {
+                    (Int(bytes[index + 2]) * 77 + Int(bytes[index + 1]) * 150 + Int(bytes[index]) * 29) >> 8
+                }
+                for x in 0..<width {
+                    var maxDiff = 0, low = 255, high = 0
+                    for row in stride(from: 0, to: old.height, by: rowStep) {
+                        let la = luminance(a, row * old.bytesPerRow + x * 4)
+                        let lb = luminance(b, row * new.bytesPerRow + x * 4)
+                        maxDiff = max(maxDiff, abs(la - lb))
+                        low = min(low, la)
+                        high = max(high, la)
+                    }
+                    moving[x] = maxDiff > 6
+                    busy[x] = high - low > 24
+                }
+            }
+        }
+        guard moving.filter({ $0 }).count >= max(64, width / 6),
+              let first = moving.firstIndex(of: true),
+              let last = moving.lastIndex(of: true)
+        else { return nil }
+
+        var left = 0
+        if let edge = (0 ..< first).last(where: { busy[$0] }) { left = edge + 1 }
+        var right = width
+        if let edge = (last + 1 ..< width).first(where: { busy[$0] }) { right = edge }
+        guard right - left >= 64 else { return 0 ..< width }
+        return left ..< right
     }
 
     // MARK: - Comparação
