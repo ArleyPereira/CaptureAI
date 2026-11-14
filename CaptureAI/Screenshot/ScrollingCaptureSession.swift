@@ -349,13 +349,24 @@ final class ScrollingCaptureSession: NSObject {
 
 // MARK: - Recebimento dos quadros
 
-/// Recebe os quadros da gravação numa fila própria e emenda ali mesmo.
+/// Recebe os quadros da gravação e emenda numa fila à parte.
+///
+/// A emenda fica sempre com o quadro mais recente: se um quadro demora mais
+/// que o intervalo da gravação, os que chegaram nesse meio-tempo são
+/// trocados pelo último em vez de esperarem na fila. Antes eles se
+/// acumulavam, e a prévia continuava crescendo devagar depois que a
+/// rolagem já tinha acabado.
 private final class ScrollStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     let queue = DispatchQueue(label: "dev.arley.santana.CaptureAI.scrolling", qos: .userInitiated)
+    private let stitchQueue = DispatchQueue(label: "dev.arley.santana.CaptureAI.stitching", qos: .userInitiated)
     let maxHeight = 30_000
     private lazy var stitcher = ScrollStitcher(maxHeight: maxHeight)
 
-    /// Chamado na fila de quadros quando entra um trecho novo.
+    private let lock = NSLock()
+    private var pending: ScrollFrame?
+    private var isStitching = false
+
+    /// Chamado na fila da emenda quando entra um trecho novo.
     var onProgress: (@Sendable ([CGImage], Int) -> Void)?
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
@@ -364,18 +375,46 @@ private final class ScrollStreamOutput: NSObject, SCStreamOutput, @unchecked Sen
               let frame = Self.copyFrame(pixelBuffer)
         else { return }
 
-        switch stitcher.add(frame) {
-        case .started, .appended, .limitReached:
-            onProgress?(stitcher.strips, stitcher.stitchedHeight)
-        case .unchanged, .noMatch:
-            break
+        lock.lock()
+        pending = frame
+        let start = !isStitching
+        isStitching = true
+        lock.unlock()
+        if start {
+            stitchQueue.async { [self] in drain() }
+        }
+    }
+
+    /// Emenda o quadro pendente até não sobrar nenhum.
+    private func drain() {
+        while true {
+            lock.lock()
+            guard let frame = pending else {
+                isStitching = false
+                lock.unlock()
+                return
+            }
+            pending = nil
+            lock.unlock()
+
+            switch stitcher.add(frame) {
+            case .started, .appended, .limitReached:
+                onProgress?(stitcher.strips, stitcher.stitchedHeight)
+            case .unchanged, .noMatch:
+                break
+            }
         }
     }
 
     func makeImage() async -> CGImage? {
         await withCheckedContinuation { continuation in
+            // Depois do último quadro: a gravação já parou, e a fila da
+            // emenda termina o que estiver pendente antes de chegar aqui.
             queue.async { [self] in
-                continuation.resume(returning: stitcher.makeImage())
+                stitchQueue.async { [self] in
+                    drain()
+                    continuation.resume(returning: stitcher.makeImage())
+                }
             }
         }
     }
