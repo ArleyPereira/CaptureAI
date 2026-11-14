@@ -13,8 +13,9 @@ enum CaptureEditorResult {
     case text(CGImage, scale: CGFloat)
     /// Modo janela sobre uma modal: o recorte dela, o retângulo global e o monitor.
     case modal(CGImage, frame: CGRect, screen: NSScreen)
-    /// Modo scroll: a área escolhida, em coordenadas globais, e o monitor.
-    case scroll(CGRect, screen: NSScreen)
+    /// Captura com rolagem: a área, em coordenadas globais, o monitor e se
+    /// ela é uma área livre, uma janela ou uma modal.
+    case scroll(CGRect, screen: NSScreen, style: ScrollCaptureStyle)
     case cancelled
 }
 
@@ -48,6 +49,13 @@ final class CaptureEditorController {
         model.onChange = { [weak self] in self?.refresh() }
         model.onExtractText = { [weak self] in self?.finishText() }
         model.onStartScroll = { [weak self] in self?.finishScroll() }
+        model.onStartWindowScroll = { [weak self] rect, style in
+            guard let self, let screen = self.screen(containingCocoa: rect) else { return }
+            // Uma janela que passa da borda do monitor só rola na parte visível.
+            let visible = rect.intersection(screen.frame).integral
+            guard visible.width >= 40, visible.height >= 40 else { return }
+            self.complete(with: .scroll(visible, screen: screen, style: style))
+        }
         model.onOpenColorPanel = { [weak self] in self?.openColorPanel() }
         model.onCaptureModal = { [weak self] frame in
             guard let self else { return }
@@ -208,6 +216,14 @@ final class CaptureEditorController {
         complete(with: .text(image, scale: active.backingScaleFactor))
     }
 
+    /// O monitor com a maior parte de um retângulo em coordenadas do Cocoa.
+    private func screen(containingCocoa rect: CGRect) -> NSScreen? {
+        NSScreen.screens.max { a, b in
+            let areaA = a.frame.intersection(rect), areaB = b.frame.intersection(rect)
+            return areaA.width * areaA.height < areaB.width * areaB.height
+        }
+    }
+
     private func finishScroll() {
         guard
             let active = windows.first(where: { $0.editor.selection != nil }),
@@ -216,7 +232,7 @@ final class CaptureEditorController {
         else { return }
         // Da view (origem no canto do monitor) para a tela toda, em pontos.
         let global = selection.offsetBy(dx: active.frame.minX, dy: active.frame.minY)
-        complete(with: .scroll(global, screen: screen))
+        complete(with: .scroll(global, screen: screen, style: .area))
     }
 
     private func complete(with result: CaptureEditorResult) {

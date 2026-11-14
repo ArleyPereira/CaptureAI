@@ -482,6 +482,9 @@ final class CaptureEditorModel {
     @ObservationIgnored var onExtractText: () -> Void = {}
     /// Modo scroll: a área foi confirmada e a captura com rolagem começa.
     @ObservationIgnored var onStartScroll: () -> Void = {}
+    /// Modo janela, S sobre o destaque: rolagem da janela ou da modal, com
+    /// o retângulo em coordenadas globais do Cocoa.
+    @ObservationIgnored var onStartWindowScroll: (CGRect, ScrollCaptureStyle) -> Void = { _, _ in }
     @ObservationIgnored var onOpenColorPanel: () -> Void = {}
     /// Pede redesenho e devolve o teclado ao editor depois de um clique na barra.
     @ObservationIgnored var onChange: () -> Void = {}
