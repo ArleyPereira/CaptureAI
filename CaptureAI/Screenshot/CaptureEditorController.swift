@@ -41,6 +41,11 @@ final class CaptureEditorController {
         dismiss()
         self.completion = completion
         model.reset(mode: mode, windows: capturableWindows)
+        // O modo de partida desta captura. Sem isto ficava o da captura
+        // anterior (janela, scroll, texto), e a primeira mudança no modelo
+        // — escolher uma ferramenta na barra — parecia uma troca de modo e
+        // apagava a seleção.
+        lastMode = mode
 
         model.onCopy = { [weak self] in self?.finish(asCopy: true) }
         model.onSave = { [weak self] in self?.finish(asCopy: false) }
