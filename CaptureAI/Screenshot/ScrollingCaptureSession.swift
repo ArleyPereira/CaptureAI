@@ -298,8 +298,19 @@ final class ScrollingCaptureSession: NSObject {
             return
         }
         let size = hosting.fittingSize
+        let inset = ScrollPill.shadowInset
+        // Logo dentro do topo da área: o alto da pílula 12 pt abaixo dele.
+        var top = rect.maxY - 12 + inset
+        // Numa área que encosta no topo da tela (uma janela maximizada), os
+        // controles não cabem acima e descem para dentro dela, justamente
+        // onde fica esta pílula: ela passa para logo abaixo deles.
+        if let controls = controlsPanel?.frame, controls.minY + inset < rect.maxY {
+            // A base visível dos controles, menos 8 pt de folga, vira o alto
+            // visível da pílula (as duas têm a margem da sombra em volta).
+            top = min(top, controls.minY + inset - 8 + inset)
+        }
         panel.setFrame(
-            NSRect(x: rect.midX - size.width / 2, y: rect.maxY - size.height - 8 + (ScrollPill.shadowInset - 4), width: size.width, height: size.height),
+            NSRect(x: rect.midX - size.width / 2, y: top - size.height, width: size.width, height: size.height),
             display: true
         )
         panel.orderFrontRegardless()
