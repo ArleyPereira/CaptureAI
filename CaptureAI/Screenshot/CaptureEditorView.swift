@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import SwiftUI
 
 /// Editor de captura de um monitor: tela congelada, véu, seleção e anotações.
@@ -7,6 +8,11 @@ import SwiftUI
 /// um quadro de atraso. A barra de ferramentas é SwiftUI, hospedada como
 /// subview e reposicionada a cada mudança da seleção.
 final class CaptureEditorView: NSView {
+    /// Registra cada vez que a seleção some e por quê: a seleção às vezes se
+    /// perde ao clicar na barra, e o motivo não aparece na tela. Para ler:
+    /// `log show --last 1h --predicate 'subsystem == "dev.arley.santana.CaptureAI" AND category == "capture-editor"'`
+    private let logger = Logger(subsystem: "dev.arley.santana.CaptureAI", category: "capture-editor")
+
     /// A foto do monitor tirada ao apertar o atalho, em pixels.
     let frozen: CGImage
     private let model: CaptureEditorModel
@@ -79,7 +85,8 @@ final class CaptureEditorView: NSView {
     }
 
     func clearSelection() {
-        guard selection != nil else { return }
+        guard let current = selection else { return }
+        logger.notice("Seleção apagada: outra tela começou uma seleção. Seleção \(Self.describe(current), privacy: .public).")
         endBubbleEditing()
         selection = nil
         drag = nil
@@ -345,7 +352,19 @@ final class CaptureEditorView: NSView {
             }
         }
 
+        // Um clique na barra que não foi tratado por ela (a folga entre os
+        // botões, a borda arredondada, um instante em que ela ainda não se
+        // reposicionou) chegava aqui e começava uma seleção nova, apagando a
+        // atual e as anotações. Perto da barra, o clique não faz nada.
+        if selection != nil, !toolbarHost.isHidden, toolbarHost.frame.insetBy(dx: -8, dy: -8).contains(point) {
+            logger.notice("Clique na barra chegou ao editor e foi ignorado: ponto \(Self.describe(point), privacy: .public), barra \(Self.describe(self.toolbarHost.frame), privacy: .public), ferramenta \(String(describing: self.model.tool), privacy: .public).")
+            return
+        }
+
         // Fora da seleção: começa outra. As anotações eram da área antiga.
+        if let selection {
+            logger.notice("Seleção apagada: clique fora dela começou outra. Ponto \(Self.describe(point), privacy: .public), seleção \(Self.describe(selection), privacy: .public), barra \(self.toolbarHost.isHidden ? "escondida" : Self.describe(self.toolbarHost.frame), privacy: .public), ferramenta \(String(describing: self.model.tool), privacy: .public), anotações \(self.model.annotations.count, privacy: .public).")
+        }
         model.annotations = []
         drag = .creating(anchor: point)
         selection = nil
@@ -414,6 +433,7 @@ final class CaptureEditorView: NSView {
         case .creating:
             // Um clique sem arrasto não é uma seleção.
             if let rect = selection, rect.width < 5 || rect.height < 5 {
+                logger.notice("Clique sem arrasto: nenhuma seleção (\(Self.describe(rect), privacy: .public)).")
                 selection = nil
             }
             // No modo texto não há o que ajustar: soltar já entrega o recorte.
@@ -682,6 +702,9 @@ final class CaptureEditorView: NSView {
     /// Chamado quando o modo muda: a seleção de área não vale no modo janela.
     func modeDidChange() {
         endBubbleEditing()
+        if let selection {
+            logger.notice("Seleção apagada: o modo mudou para \(String(describing: self.model.mode), privacy: .public). Seleção \(Self.describe(selection), privacy: .public).")
+        }
         selection = nil
         drag = nil
         draft = nil
@@ -789,6 +812,16 @@ final class CaptureEditorView: NSView {
         case .bottomLeft: return .frameResize(position: .bottomLeft, directions: .all)
         case .bottomRight: return .frameResize(position: .bottomRight, directions: .all)
         }
+    }
+
+    // MARK: - Log
+
+    private static func describe(_ rect: CGRect) -> String {
+        "(\(Int(rect.minX)), \(Int(rect.minY)), \(Int(rect.width))×\(Int(rect.height)))"
+    }
+
+    private static func describe(_ point: CGPoint) -> String {
+        "(\(Int(point.x)), \(Int(point.y)))"
     }
 
     // MARK: - Teclado
