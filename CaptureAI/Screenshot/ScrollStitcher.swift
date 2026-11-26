@@ -7,6 +7,13 @@ import Foundation
 /// Copiado de propósito: o ScreenCaptureKit reaproveita os buffers, e um
 /// quadro guardado por referência mudaria de conteúdo depois.
 struct ScrollFrame: Sendable {
+    /// Pixels repetidos nas colunas a partir de `x`, nas linhas `rows`.
+    struct Fill {
+        let x: Int
+        let pixels: Data
+        var rows: Range<Int> = 0 ..< Int.max
+    }
+
     let width: Int
     let height: Int
     let bytesPerRow: Int
@@ -48,24 +55,21 @@ struct ScrollFrame: Sendable {
         return ScrollFrame(width: range.count, height: height, bytesPerRow: rowBytes, data: cropped)
     }
 
-    /// As linhas `range` com as colunas fora de `content` trocadas por
-    /// `left` e `right` (os pixels de uma linha de fundo das laterais).
-    func image(rows range: Range<Int>, keeping content: Range<Int>, left: Data, right: Data) -> CGImage? {
+    /// As linhas `range` com trechos de colunas trocados por pixels fixos,
+    /// repetidos linha a linha: cada `fill` começa na coluna `x` e vale só
+    /// nas linhas `rows` do quadro. Serve para estender as laterais lisas e
+    /// para apagar o polegar da barra de rolagem.
+    func image(rows range: Range<Int>, fills: [Fill]) -> CGImage? {
         let rows = range.clamped(to: 0..<height)
         guard !rows.isEmpty else { return nil }
         var slice = data.subdata(in: rows.lowerBound * bytesPerRow ..< rows.upperBound * bytesPerRow)
         slice.withUnsafeMutableBytes { raw in
             guard let base = raw.baseAddress else { return }
-            left.withUnsafeBytes { leftBytes in
-                right.withUnsafeBytes { rightBytes in
-                    for row in 0..<rows.count {
-                        let line = base + row * bytesPerRow
-                        if let source = leftBytes.baseAddress, !left.isEmpty {
-                            memcpy(line, source, left.count)
-                        }
-                        if let source = rightBytes.baseAddress, !right.isEmpty {
-                            memcpy(line + content.upperBound * 4, source, right.count)
-                        }
+            for fill in fills where !fill.pixels.isEmpty && (fill.x + fill.pixels.count / 4) <= width {
+                fill.pixels.withUnsafeBytes { source in
+                    guard let source = source.baseAddress else { return }
+                    for row in rows.clamped(to: fill.rows) {
+                        memcpy(base + (row - rows.lowerBound) * bytesPerRow + fill.x * 4, source, fill.pixels.count)
                     }
                 }
             }
@@ -137,6 +141,9 @@ final class ScrollStitcher {
     /// cada trecho novo: a lateral se estende lisa enquanto o conteúdo cresce.
     private var leftFill = Data()
     private var rightFill = Data()
+    /// A cor do trilho nas colunas da barra de rolagem, pintada em todas as
+    /// linhas: o polegar some, em vez de aparecer onde estava em cada quadro.
+    private var scrollbarFill: ScrollFrame.Fill?
 
     init(maxHeight: Int = 30_000, keepsSides: Bool = false) {
         self.maxHeight = maxHeight
@@ -149,8 +156,12 @@ final class ScrollStitcher {
         guard keepsSides, let full, let columns = contentColumns, columns != 0 ..< full.width else {
             return frame.image(rows: rows)
         }
-        guard extendingSides else { return full.image(rows: rows) }
-        return full.image(rows: rows, keeping: columns, left: leftFill, right: rightFill)
+        var fills: [ScrollFrame.Fill] = []
+        if extendingSides {
+            fills = [ScrollFrame.Fill(x: 0, pixels: leftFill), ScrollFrame.Fill(x: columns.upperBound, pixels: rightFill)]
+        }
+        if let scrollbarFill { fills.append(scrollbarFill) }
+        return fills.isEmpty ? full.image(rows: rows) : full.image(rows: rows, fills: fills)
     }
 
     /// Escolhe, na metade de baixo, a linha mais lisa das laterais.
@@ -195,10 +206,25 @@ final class ScrollStitcher {
             // um índice ao lado do texto) não acompanham a rolagem: ficam de
             // fora da imagem, ou nenhuma linha encaixaria na do quadro
             // anterior.
-            guard let columns = Self.contentColumns(from: first, to: frame) else { return .unchanged }
+            guard let found = Self.contentColumns(from: first, to: frame) else { return .unchanged }
+            let columns = found.content
             contentColumns = columns
             if columns != 0 ..< frame.width {
-                if keepsSides { prepareSideFill(from: firstFull, content: columns) }
+                if keepsSides {
+                    prepareSideFill(from: firstFull, content: columns)
+                    if let bar = found.scrollbar {
+                        scrollbarFill = Self.trackPixels(old: firstFull, new: frame, columns: bar)
+                            .flatMap { fill in
+                                Self.trackRows(old: firstFull, new: frame, column: (bar.lowerBound + bar.upperBound) / 2)
+                                    .map { ScrollFrame.Fill(x: fill.x, pixels: fill.pixels, rows: $0) }
+                            }
+                        // A primeira parte já tinha o polegar: refeita sem ele.
+                        if scrollbarFill != nil,
+                           let image = image(rows: 0 ..< firstFull.height, of: firstFull, full: firstFull, extendingSides: false) {
+                            strips = [image]
+                        }
+                    }
+                }
                 first = first.columns(columns)
                 frame = frame.columns(columns)
                 if !keepsSides, let image = first.image(rows: 0 ..< first.height) {
@@ -235,6 +261,10 @@ final class ScrollStitcher {
         // A base fixa só vale a partir do primeiro encaixe: antes dele não dá
         // para distinguir uma barra fixa de conteúdo que ainda não se mexeu.
         var band = bottomBand ?? bottom
+        // No fim da página só a base fixa muda (uma sombra, um rodapé que
+        // aparece): as linhas iguais do topo passam do começo da base, e o
+        // intervalo abaixo sairia invertido — o app fechava aqui.
+        guard top < height - band else { return .unchanged }
         let moving = top ..< (height - band)
         guard moving.count > 32 else { return .noMatch }
 
@@ -304,11 +334,18 @@ final class ScrollStitcher {
     /// (texto, ícones) fica de fora; uma margem lisa parada fica, para o
     /// conteúdo não perder o respiro. Nil quando ainda não há rolagem: só um
     /// cursor piscando ou um ícone animado não decidem nada.
-    static func contentColumns(from old: ScrollFrame, to new: ScrollFrame) -> Range<Int>? {
+    ///
+    /// Só as linhas que rolam contam para dizer se uma coluna é lisa: uma
+    /// barra de ferramentas parada no topo, escura sobre uma página branca,
+    /// fazia a margem branca da página parecer lateral, e ela saía pintada
+    /// com o fundo da barra lateral nos trechos esticados.
+    static func contentColumns(from old: ScrollFrame, to new: ScrollFrame) -> (content: Range<Int>, scrollbar: Range<Int>?)? {
         let width = old.width
         let rowStep = max(1, old.height / 200)
         var moving = [Bool](repeating: false, count: width)
         var busy = [Bool](repeating: false, count: width)
+        var rows: Range<Int> = 0 ..< old.height
+
         old.data.withUnsafeBytes { oldRaw in
             new.data.withUnsafeBytes { newRaw in
                 let a = oldRaw.bindMemory(to: UInt8.self)
@@ -316,24 +353,58 @@ final class ScrollStitcher {
                 func luminance(_ bytes: UnsafeBufferPointer<UInt8>, _ index: Int) -> Int {
                     (Int(bytes[index + 2]) * 77 + Int(bytes[index + 1]) * 150 + Int(bytes[index]) * 29) >> 8
                 }
-                for x in 0..<width {
-                    var maxDiff = 0, low = 255, high = 0
-                    for row in stride(from: 0, to: old.height, by: rowStep) {
+                // As linhas que mudam: um cursor piscando não conta.
+                var firstRow: Int?, lastRow = 0
+                for row in stride(from: 0, to: old.height, by: rowStep) {
+                    var changed = 0
+                    for x in 0..<width {
                         let la = luminance(a, row * old.bytesPerRow + x * 4)
                         let lb = luminance(b, row * new.bytesPerRow + x * 4)
-                        maxDiff = max(maxDiff, abs(la - lb))
-                        low = min(low, la)
-                        high = max(high, la)
+                        if abs(la - lb) > 6 {
+                            moving[x] = true
+                            changed += 1
+                        }
                     }
-                    moving[x] = maxDiff > 6
+                    if changed >= 8 {
+                        if firstRow == nil { firstRow = row }
+                        lastRow = row
+                    }
+                }
+                if let firstRow {
+                    rows = firstRow ..< min(old.height, lastRow + rowStep)
+                }
+                for x in 0..<width {
+                    var low = 255, high = 0
+                    for row in stride(from: rows.lowerBound, to: rows.upperBound, by: rowStep) {
+                        let value = luminance(a, row * old.bytesPerRow + x * 4)
+                        low = min(low, value)
+                        high = max(high, value)
+                    }
                     busy[x] = high - low > 24
                 }
             }
         }
         guard moving.filter({ $0 }).count >= max(64, width / 6),
               let first = moving.firstIndex(of: true),
-              let last = moving.lastIndex(of: true)
+              var last = moving.lastIndex(of: true)
         else { return nil }
+
+        // A barra de rolagem da página: o polegar desce junto com a rolagem,
+        // então a coluna dele "se mexe", mas não acompanha o conteúdo — emendada,
+        // saía com o polegar repetido em várias alturas. É uma faixa estreita
+        // na ponta direita, separada do conteúdo por um vão parado, com um
+        // trecho só de cor diferente (o polegar) sobre o trilho.
+        var runStart = last
+        while runStart > first, moving[runStart - 1] { runStart -= 1 }
+        var gapStart = runStart
+        while gapStart > first, !moving[gapStart - 1] { gapStart -= 1 }
+        var scrollbar: Range<Int>?
+        if last - runStart + 1 <= 48, runStart - gapStart >= 4,
+           isScrollbarThumb(old, column: (runStart + last) / 2, rows: rows),
+           isScrollbarThumb(new, column: (runStart + last) / 2, rows: rows) {
+            scrollbar = runStart ..< last + 1
+            last = gapStart - 1
+        }
 
         var left = 0
         if let edge = (0 ..< first).last(where: { busy[$0] }) { left = edge + 1 }
@@ -347,7 +418,7 @@ final class ScrollStitcher {
             guard let bytes = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
             func isBusy(_ x: Int) -> Bool {
                 var low = 255, high = 0
-                for row in 0..<old.height {
+                for row in rows {
                     let value = Int(bytes[row * old.bytesPerRow + x * 4 + 1])
                     if value < low { low = value }
                     if value > high { high = value }
@@ -358,8 +429,119 @@ final class ScrollStitcher {
             if let edge = (left ..< first).last(where: isBusy) { left = edge + 1 }
             if last + 1 < right, let edge = (last + 1 ..< right).first(where: isBusy) { right = edge }
         }
-        guard right - left >= 64 else { return 0 ..< width }
-        return left ..< right
+        if let scrollbar { right = min(right, scrollbar.lowerBound) }
+        guard right - left >= 64 else { return (0 ..< width, nil) }
+        return (left ..< right, scrollbar)
+    }
+
+    /// As linhas do trilho da barra de rolagem: a partir do trecho em que o
+    /// polegar desceu, para cima e para baixo enquanto a cor for de trilho
+    /// ou de polegar (com folga para a borda antialiasada). Para
+    /// na barra de abas, na de endereço ou em qualquer moldura de outra cor —
+    /// pintadas também, elas ganhavam uma faixa da cor do trilho.
+    static func trackRows(old: ScrollFrame, new: ScrollFrame, column x: Int) -> Range<Int>? {
+        old.data.withUnsafeBytes { oldRaw in
+            new.data.withUnsafeBytes { newRaw in
+                guard let a = oldRaw.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                      let b = newRaw.baseAddress?.assumingMemoryBound(to: UInt8.self)
+                else { return nil }
+                func value(_ bytes: UnsafePointer<UInt8>, _ frame: ScrollFrame, _ row: Int) -> Int {
+                    Int(bytes[row * frame.bytesPerRow + x * 4 + 1])
+                }
+                guard let changed = (0..<old.height).first(where: { abs(value(a, old, $0) - value(b, new, $0)) > 6 })
+                else { return nil }
+                let thumb = value(a, old, changed), track = value(b, new, changed)
+                // Perto de uma das duas cores; o meio-termo só vale por até
+                // 3 linhas seguidas (a borda), não como faixa: uma barra de
+                // ferramentas escura cairia entre o trilho e o polegar.
+                func near(_ v: Int) -> Bool { abs(v - thumb) <= 10 || abs(v - track) <= 10 }
+                func inside(_ row: Int) -> Bool { near(value(a, old, row)) && near(value(b, new, row)) }
+                func extend(from start: Int, by step: Int) -> Int {
+                    var edge = start
+                    var row = start + step
+                    while row >= 0, row < old.height {
+                        if inside(row) {
+                            edge = row
+                            row += step
+                            continue
+                        }
+                        let ahead = (1...3).map { row + $0 * step }.filter { $0 >= 0 && $0 < old.height }
+                        guard let next = ahead.first(where: inside) else { break }
+                        row = next
+                    }
+                    return edge
+                }
+                return extend(from: changed, by: -1) ..< extend(from: changed, by: 1) + 1
+            }
+        }
+    }
+
+    /// A cor do trilho em cada coluna da barra de rolagem. Rolando para
+    /// baixo o polegar desce: no primeiro trecho em que `old` e `new`
+    /// diferem, `old` ainda tem o polegar e `new` já mostra o trilho.
+    static func trackPixels(old: ScrollFrame, new: ScrollFrame, columns: Range<Int>) -> ScrollFrame.Fill? {
+        var pixels = Data(count: columns.count * 4)
+        var trackRows = [Int?](repeating: nil, count: columns.count)
+        old.data.withUnsafeBytes { oldRaw in
+            new.data.withUnsafeBytes { newRaw in
+                guard let a = oldRaw.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                      let b = newRaw.baseAddress?.assumingMemoryBound(to: UInt8.self)
+                else { return }
+                for (index, x) in columns.enumerated() {
+                    var start: Int?, end = 0
+                    for row in 0..<old.height {
+                        let i = row * old.bytesPerRow + x * 4
+                        let j = row * new.bytesPerRow + x * 4
+                        let differs = abs(Int(a[i + 1]) - Int(b[j + 1])) > 6
+                        if differs {
+                            if start == nil { start = row }
+                            end = row
+                        } else if start != nil {
+                            break
+                        }
+                    }
+                    trackRows[index] = start.map { ($0 + end) / 2 }
+                }
+            }
+        }
+        // Uma coluna sem diferença (a borda do polegar) usa a linha da vizinha.
+        guard let fallback = trackRows.compactMap({ $0 }).first else { return nil }
+        new.data.withUnsafeBytes { newRaw in
+            pixels.withUnsafeMutableBytes { out in
+                guard let b = newRaw.baseAddress, let target = out.baseAddress else { return }
+                var row = fallback
+                for (index, x) in columns.enumerated() {
+                    row = trackRows[index] ?? row
+                    memcpy(target + index * 4, b + row * new.bytesPerRow + x * 4, 4)
+                }
+            }
+        }
+        return ScrollFrame.Fill(x: columns.lowerBound, pixels: pixels)
+    }
+
+    /// Se a coluna, nas linhas `rows`, é um trilho liso com um trecho só de
+    /// outra cor: no máximo duas trocas entre claro e escuro. Texto ou imagem
+    /// trocam muitas vezes.
+    private static func isScrollbarThumb(_ frame: ScrollFrame, column x: Int, rows: Range<Int>) -> Bool {
+        frame.data.withUnsafeBytes { raw in
+            guard let bytes = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return false }
+            var low = 255, high = 0
+            for row in rows {
+                let value = Int(bytes[row * frame.bytesPerRow + x * 4 + 1])
+                low = min(low, value)
+                high = max(high, value)
+            }
+            guard high - low > 8 else { return false }
+            let middle = (low + high) / 2
+            var switches = 0
+            var above: Bool?
+            for row in rows {
+                let isAbove = Int(bytes[row * frame.bytesPerRow + x * 4 + 1]) > middle
+                if let above, above != isAbove { switches += 1 }
+                above = isAbove
+            }
+            return switches <= 2
+        }
     }
 
     // MARK: - Comparação

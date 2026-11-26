@@ -49,6 +49,9 @@ final class ScrollingCaptureSession: NSObject {
     private var stream: SCStream?
     private let output: ScrollStreamOutput
     private var autoScrollTimer: Timer?
+    /// Onde o cursor estava ao ligar a rolagem automática, em coordenadas do
+    /// Quartz: ele volta para lá quando ela para.
+    private var cursorBeforeAutoScroll: CGPoint?
     /// Última vez que um trecho novo entrou — a rolagem automática para
     /// sozinha quando a página não anda mais.
     private var lastProgress = Date()
@@ -151,6 +154,13 @@ final class ScrollingCaptureSession: NSObject {
         // o centro da área, convertido para a origem no topo que o Quartz usa.
         let primaryHeight = NSScreen.screens.first?.frame.maxY ?? screen.frame.maxY
         let point = CGPoint(x: rect.midX, y: primaryHeight - rect.midY)
+        // Postar o evento num ponto leva o cursor até lá. Sem supressão: por
+        // padrão o sistema ignora o mouse de verdade por um instante depois
+        // de cada evento sintético, e a 60 por segundo o cursor ficava preso.
+        let source = CGEventSource(stateID: .combinedSessionState)
+        source?.localEventsSuppressionInterval = 0
+        cursorBeforeAutoScroll = CGEvent(source: nil)?.location
+        var posted = false
         autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -159,11 +169,20 @@ final class ScrollingCaptureSession: NSObject {
                     self.stopAutoScroll()
                     return
                 }
+                // A pessoa mexeu o mouse: ela retoma o controle, e o cursor
+                // fica onde ela o levou.
+                if posted, let now = CGEvent(source: nil)?.location,
+                   hypot(now.x - point.x, now.y - point.y) > 6 {
+                    self.cursorBeforeAutoScroll = nil
+                    self.stopAutoScroll()
+                    return
+                }
                 guard let event = CGEvent(
-                    scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -6, wheel2: 0, wheel3: 0
+                    scrollWheelEvent2Source: source, units: .pixel, wheelCount: 1, wheel1: -6, wheel2: 0, wheel3: 0
                 ) else { return }
                 event.location = point
                 event.post(tap: .cghidEventTap)
+                posted = true
             }
         }
     }
@@ -171,6 +190,12 @@ final class ScrollingCaptureSession: NSObject {
     private func stopAutoScroll() {
         autoScrollTimer?.invalidate()
         autoScrollTimer = nil
+        if let cursor = cursorBeforeAutoScroll {
+            cursorBeforeAutoScroll = nil
+            CGWarpMouseCursorPosition(cursor)
+            // Sem isto o cursor fica parado um instante depois do salto.
+            CGAssociateMouseAndMouseCursorPosition(1)
+        }
         state.isAutoScrolling = false
         updateAutoScrollPill()
     }
