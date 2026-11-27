@@ -37,7 +37,7 @@ enum MicrophoneInterruption: Equatable, Sendable {
     var message: String {
         switch self {
         case .disconnected(let name):
-            return "\(name) foi desconectado. A gravação está pausada: conecte um microfone e continue, ou encerre com o que já foi dito."
+            return "\(name) foi desconectado. A gravação está pausada: reconecte e toque em ▶, ou toque em ▶ para seguir com o padrão do macOS. Também dá para encerrar com o que já foi dito."
         case .muted(let name):
             return "\(name) está mutado. A gravação está pausada: tire o mudo e continue, ou encerre com o que já foi dito."
         case .stopped(let name):

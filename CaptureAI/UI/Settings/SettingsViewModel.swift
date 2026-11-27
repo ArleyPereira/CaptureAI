@@ -482,6 +482,51 @@ final class SettingsViewModel {
         }
     }
 
+    // MARK: - Microfone
+
+    /// Microfones conectados e o padrão do macOS, atualizados ao conectar ou
+    /// desconectar com a janela aberta.
+    var microphones: MicrophoneDeviceMonitor { MicrophoneDeviceMonitor.shared }
+
+    /// `nil` = "Padrão do macOS".
+    var selectedMicrophoneUID: String? { settings.microphoneUID }
+
+    func selectMicrophone(_ device: MicrophoneDevice?) {
+        settings.setMicrophone(device)
+    }
+
+    /// O escolhido está salvo mas não conectado agora.
+    var isSelectedMicrophoneMissing: Bool {
+        guard let uid = settings.microphoneUID else { return false }
+        return !microphones.devices.contains(where: { $0.uid == uid })
+    }
+
+    /// Texto do campo: a opção marcada.
+    var microphoneFieldTitle: String {
+        guard let uid = settings.microphoneUID else { return "Padrão do macOS" }
+        return microphones.devices.first(where: { $0.uid == uid })?.name
+            ?? settings.microphoneName
+            ?? "Microfone escolhido"
+    }
+
+    /// Linha cinza embaixo do campo: o que está gravando de fato.
+    var microphoneStatusLine: String? {
+        let usingName = microphones.defaultDeviceName ?? "nenhum microfone encontrado"
+        if settings.microphoneUID == nil {
+            return "Usando: \(usingName)"
+        }
+        if isSelectedMicrophoneMissing {
+            return "Não está conectado. Usando o padrão do macOS: \(usingName)"
+        }
+        return nil
+    }
+
+    /// Nome do escolhido ausente, para listar no menu só enquanto ele está marcado.
+    var missingSelectedMicrophone: MicrophoneDevice? {
+        guard isSelectedMicrophoneMissing, let uid = settings.microphoneUID else { return nil }
+        return MicrophoneDevice(uid: uid, name: settings.microphoneName ?? "Microfone escolhido")
+    }
+
     var selectedLanguage: TranscriptionLanguageOption {
         get {
             TranscriptionLanguageOption(rawValue: settings.transcriptionLanguage) ?? .portuguese

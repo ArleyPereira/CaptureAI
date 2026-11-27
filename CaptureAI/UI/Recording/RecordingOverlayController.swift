@@ -49,7 +49,8 @@ final class RecordingOverlayController {
         // parar. Sem barra, o clique não teria retorno nenhum.
         // O microfone caiu e a gravação pausou sozinha: sem barra, o usuário
         // nem saberia que parou de gravar — e não teria onde continuar.
-        let mustWarn = appState.microphoneInterruption != nil && appState.recordingState == .paused
+        let mustWarn = (appState.microphoneInterruption != nil && appState.recordingState == .paused)
+            || (appState.microphoneFallback != nil && appState.recordingState == .recording)
         guard style.showsFloatingBar || appState.isCapturingForField || mustWarn else {
             hide()
             return
@@ -107,8 +108,16 @@ final class RecordingOverlayController {
     // MARK: - Aviso do microfone
 
     private func syncWarning(with appState: AppState) {
-        guard appState.recordingState == .paused,
-              let interruption = appState.microphoneInterruption,
+        let bubble: MicrophoneWarningBubble?
+        if appState.recordingState == .paused, let interruption = appState.microphoneInterruption {
+            bubble = MicrophoneWarningBubble(interruption: interruption)
+        } else if appState.recordingState == .recording, let fallback = appState.microphoneFallback {
+            bubble = MicrophoneWarningBubble(fallback: fallback)
+        } else {
+            bubble = nil
+        }
+
+        guard let bubble,
               appState.playback.session == nil,
               let barPanel = panel, barPanel.isVisible else {
             warningPanel?.orderOut(nil)
@@ -116,7 +125,6 @@ final class RecordingOverlayController {
         }
 
         let size = MicrophoneWarningBubble.size
-        let bubble = MicrophoneWarningBubble(interruption: interruption)
         if let warningHosting {
             warningHosting.rootView = bubble
         } else {

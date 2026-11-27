@@ -6,7 +6,26 @@ import SwiftUI
 /// o brilho colorido do estilo moderno e sumia. Aqui o fundo é escuro e
 /// sólido, legível sobre qualquer coisa que esteja atrás.
 struct MicrophoneWarningBubble: View {
-    let interruption: MicrophoneInterruption
+    let symbol: String
+    let title: String
+    let hint: String
+    let message: String
+
+    /// Microfone caiu: a gravação pausou.
+    init(interruption: MicrophoneInterruption) {
+        symbol = "mic.slash.fill"
+        title = interruption.title
+        hint = Self.hint(for: interruption)
+        message = interruption.message
+    }
+
+    /// Microfone escolhido ausente: gravando pelo padrão do macOS.
+    init(fallback: MicrophoneFallback) {
+        symbol = "mic.badge.xmark"
+        title = fallback.title
+        hint = fallback.hint
+        message = fallback.message
+    }
 
     static let size = CGSize(width: 300, height: 54)
 
@@ -14,13 +33,13 @@ struct MicrophoneWarningBubble: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "mic.slash.fill")
+            Image(systemName: symbol)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Self.accent)
                 .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(interruption.title)
+                Text(title)
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
                 Text(hint)
@@ -42,14 +61,14 @@ struct MicrophoneWarningBubble: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(Self.accent.opacity(0.45), lineWidth: 1)
         )
-        .help(interruption.message)
+        .help(message)
     }
 
     /// O que fazer, em uma linha: o play da barra logo abaixo retoma.
-    private var hint: String {
+    private static func hint(for interruption: MicrophoneInterruption) -> String {
         switch interruption {
         case .disconnected:
-            return "Gravação pausada. Conecte e toque em ▶."
+            return "Pausada. Reconecte ou toque em ▶ para o padrão."
         case .muted:
             return "Gravação pausada. Tire o mudo e toque em ▶."
         case .stopped:

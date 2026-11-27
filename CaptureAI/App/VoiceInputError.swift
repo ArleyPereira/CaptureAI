@@ -30,7 +30,7 @@ enum VoiceInputError: LocalizedError, Equatable {
         case .recordingNotInProgress:
             return "Nenhuma gravação está em andamento."
         case .emptyRecording:
-            return "A gravação veio sem áudio. Confira o microfone padrão do macOS e tente de novo."
+            return "A gravação veio sem áudio. Confira o microfone em Configurações → Transcrição e tente de novo."
         case .transcriptionFailed:
             return "Não foi possível transcrever o áudio. Tente novamente (sem nova tentativa automática)."
         case .emptyTranscription:

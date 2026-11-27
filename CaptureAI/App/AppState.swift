@@ -14,6 +14,9 @@ final class AppState {
             if recordingState != .paused {
                 microphoneInterruption = nil
             }
+            if recordingState != .recording {
+                microphoneFallback = nil
+            }
             overlayController.sync(with: self)
         }
     }
@@ -22,6 +25,23 @@ final class AppState {
     var microphoneInterruption: MicrophoneInterruption? {
         didSet {
             guard microphoneInterruption != oldValue else { return }
+            overlayController.sync(with: self)
+        }
+    }
+
+    /// O microfone escolhido não estava conectado: a captura foi para o
+    /// padrão do macOS. Aviso passageiro, some sozinho.
+    var microphoneFallback: MicrophoneFallback? {
+        didSet {
+            guard microphoneFallback != oldValue else { return }
+            fallbackDismissTask?.cancel()
+            if microphoneFallback != nil {
+                fallbackDismissTask = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(5))
+                    guard !Task.isCancelled else { return }
+                    self?.microphoneFallback = nil
+                }
+            }
             overlayController.sync(with: self)
         }
     }
@@ -76,6 +96,7 @@ final class AppState {
     private let logger = Logger(subsystem: "dev.arley.santana.CaptureAI", category: "pipeline")
 
     private var successResetTask: Task<Void, Never>?
+    private var fallbackDismissTask: Task<Void, Never>?
     private var levelPollingTask: Task<Void, Never>?
     private var durationTask: Task<Void, Never>?
     private var recordingStartedAt: Date?
@@ -151,9 +172,13 @@ final class AppState {
 
     /// Microfone já mutado ao iniciar: o gravador pausa antes de o estado
     /// virar `.recording`, e o evento pode chegar cedo demais para ser visto.
+    ///
+    /// Também avisa quando o microfone escolhido não estava conectado e a
+    /// captura começou pelo padrão do macOS.
     private func reportMutedAtStartIfNeeded() {
+        microphoneFallback = audioRecorder.inputFallback
         guard audioRecorder.isPaused, recordingState == .recording else { return }
-        let name = SystemAudioDevice.defaultInputDeviceName ?? "O microfone"
+        let name = audioRecorder.activeDeviceName ?? "O microfone"
         handleMicrophoneInterruption(.muted(deviceName: name))
     }
 
@@ -591,6 +616,7 @@ final class AppState {
             recordingState = .recording
             startLevelPolling()
             startDurationTicker()
+            microphoneFallback = audioRecorder.inputFallback
         } catch let error as VoiceInputError where error == .microphoneMuted || error == .noInputDevice {
             // O microfone ainda não voltou. Falhar aqui jogaria fora o que já
             // foi dito; a ditagem fica pausada esperando o usuário.
