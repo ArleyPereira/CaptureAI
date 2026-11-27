@@ -4,10 +4,17 @@ import ScreenCaptureKit
 /// Monta a imagem de uma captura de janela: a janela inteira, com sombra,
 /// sobre o papel de parede.
 ///
-/// A janela é capturada sozinha (`desktopIndependentWindow`), então sai
-/// completa mesmo que outra esteja por cima dela, e com os cantos
-/// arredondados transparentes. O fundo é só a janela do papel de parede — os
-/// ícones da mesa são outra janela, do Finder, e ficam de fora.
+/// A imagem tem que ser a janela como se via na tela. Sem nada por cima, ela
+/// vem da foto congelada no atalho — igual, pixel a pixel, ao modo livre,
+/// com o estado de foco e o hover daquele instante. Coberta por outra, ela
+/// é refeita só com ela e o que está atrás dela, para sair completa.
+///
+/// Capturada sozinha (`desktopIndependentWindow`), a janela perde o fundo
+/// dos materiais translúcidos: a barra lateral e o fundo saíam num cinza
+/// chapado, sem o desfoque do que estava atrás. Dessa captura só se usa o
+/// contorno — os cantos arredondados transparentes. O fundo da composição é
+/// só a janela do papel de parede — os ícones da mesa são outra janela, do
+/// Finder, e ficam de fora.
 @MainActor
 enum WindowCaptureComposer {
     enum ComposeError: LocalizedError {
@@ -44,6 +51,7 @@ enum WindowCaptureComposer {
     static func compose(
         _ target: CapturableWindow,
         on screen: NSScreen,
+        frozen: CGImage? = nil,
         snapshot: Snapshot? = nil
     ) async throws -> CGImage {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
@@ -60,7 +68,13 @@ enum WindowCaptureComposer {
         let scale = screen.backingScaleFactor
         let windowImage: CGImage
         let windowFrame: CGRect
-        if let snapshot, snapshot.windowID == target.id {
+        if let frozen,
+           let scWindow = content.windows.first(where: { $0.windowID == target.id }),
+           let shape = try? await captureShape(scWindow, scale: scale),
+           let masked = mask(frozen, to: shape) {
+            windowImage = masked
+            windowFrame = target.frame
+        } else if let snapshot, snapshot.windowID == target.id {
             windowImage = snapshot.image
             windowFrame = snapshot.frame
         } else {
@@ -83,7 +97,55 @@ enum WindowCaptureComposer {
 
     // MARK: - Captura
 
+    /// A janela como aparece na tela, mesmo que outra esteja por cima: o
+    /// monitor só com ela e as janelas atrás dela, recortado no retângulo
+    /// dela e com o contorno dela.
+    ///
+    /// As de trás entram para os materiais translúcidos terem o que
+    /// desfocar, como na tela. Se não der para montar assim (janela entre
+    /// dois monitores, por exemplo), fica a janela sozinha.
     private static func captureWindow(_ window: SCWindow, scale: CGFloat) async throws -> CGImage {
+        let shape = try await captureShape(window, scale: scale)
+        guard
+            let backed = try? await captureWithBackdrop(window, scale: scale),
+            let masked = mask(backed, to: shape)
+        else { return shape }
+        return masked
+    }
+
+    private static func captureWithBackdrop(_ window: SCWindow, scale: CGFloat) async throws -> CGImage? {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let display = content.displays.first(where: { $0.frame.contains(window.frame) }) else { return nil }
+
+        // Ela e as de trás, com o papel de parede, na ordem do `CGWindowList`.
+        guard let list = CGWindowListCopyWindowInfo(
+            [.optionOnScreenBelowWindow, .optionIncludingWindow], window.windowID
+        ) as? [[String: Any]] else { return nil }
+        let ids = Set(list.compactMap { $0[kCGWindowNumber as String] as? CGWindowID })
+        let windows = content.windows.filter { ids.contains($0.windowID) }
+        guard windows.contains(where: { $0.windowID == window.windowID }) else { return nil }
+
+        let configuration = SCStreamConfiguration()
+        configuration.sourceRect = CGRect(
+            x: window.frame.minX - display.frame.minX,
+            y: window.frame.minY - display.frame.minY,
+            width: window.frame.width,
+            height: window.frame.height
+        )
+        configuration.width = Int(window.frame.width * scale)
+        configuration.height = Int(window.frame.height * scale)
+        configuration.showsCursor = false
+        configuration.captureResolution = .best
+        return try await SCScreenshotManager.captureImage(
+            contentFilter: SCContentFilter(display: display, including: windows),
+            configuration: configuration
+        )
+    }
+
+    /// A janela sozinha: o conteúdo sai sem o fundo dos materiais
+    /// translúcidos, mas o contorno — cantos arredondados transparentes — é
+    /// o exato.
+    private static func captureShape(_ window: SCWindow, scale: CGFloat) async throws -> CGImage {
         let configuration = SCStreamConfiguration()
         configuration.width = Int(window.frame.width * scale)
         configuration.height = Int(window.frame.height * scale)
@@ -97,6 +159,23 @@ enum WindowCaptureComposer {
             contentFilter: SCContentFilter(desktopIndependentWindow: window),
             configuration: configuration
         )
+    }
+
+    /// A imagem recortada no contorno da janela: fica só onde a captura
+    /// isolada dela é opaca. As duas têm o retângulo da janela; um pixel a
+    /// mais ou a menos do arredondamento é absorvido pela escala.
+    private static func mask(_ image: CGImage, to shape: CGImage) -> CGImage? {
+        guard let context = CGContext(
+            data: nil, width: shape.width, height: shape.height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        let bounds = CGRect(x: 0, y: 0, width: shape.width, height: shape.height)
+        context.interpolationQuality = .high
+        context.draw(image, in: bounds)
+        context.setBlendMode(.destinationIn)
+        context.draw(shape, in: bounds)
+        return context.makeImage()
     }
 
     /// Só a janela do papel de parede deste monitor, sem ícones nem janelas.

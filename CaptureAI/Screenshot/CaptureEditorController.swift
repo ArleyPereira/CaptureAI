@@ -5,8 +5,10 @@ enum CaptureEditorResult {
     /// Imagem pronta e o fator pixels/ponto do monitor de origem.
     case copy(CGImage, scale: CGFloat)
     case save(CGImage, scale: CGFloat)
-    /// Modo janela: a janela escolhida e o monitor onde ela estava.
-    case window(CapturableWindow, screen: NSScreen)
+    /// Modo janela: a janela escolhida, o monitor onde ela estava e, quando
+    /// nada a cobria, o recorte dela na foto congelada — a janela exatamente
+    /// como estava na tela no instante do atalho.
+    case window(CapturableWindow, screen: NSScreen, frozen: CGImage?)
     /// Tela inteira do monitor onde está o mouse, da foto congelada.
     case fullScreen(CGImage, scale: CGFloat)
     /// Modo texto: o recorte, para reconhecer o texto dele.
@@ -77,7 +79,16 @@ final class CaptureEditorController {
         model.onCaptureWindow = { [weak self] window in
             guard let self else { return }
             let screen = self.screen(containing: window.frame) ?? NSScreen.main ?? NSScreen.screens[0]
-            self.complete(with: .window(window, screen: screen))
+            let frozen = Self.unobstructed(window, in: capturableWindows)
+                ? self.windows.first(where: { $0.screen == screen })?.editor.frozenCrop(globalRect: window.frame)
+                : nil
+            // Só serve o recorte da janela inteira: uma janela que passa da
+            // borda do monitor sai cortada na foto dele.
+            let whole = frozen.map {
+                abs(CGFloat($0.width) - window.frame.width * screen.backingScaleFactor) <= 1
+                    && abs(CGFloat($0.height) - window.frame.height * screen.backingScaleFactor) <= 1
+            } ?? false
+            self.complete(with: .window(window, screen: screen, frozen: whole ? frozen : nil))
         }
 
         for item in frozen {
@@ -255,6 +266,14 @@ final class CaptureEditorController {
             self?.dismiss()
             completion?(result)
         }
+    }
+
+    /// Nenhuma janela da frente encostava na janela no instante do atalho.
+    ///
+    /// A lista vem da frente para trás: o que está antes dela está por cima.
+    private static func unobstructed(_ target: CapturableWindow, in windows: [CapturableWindow]) -> Bool {
+        guard let index = windows.firstIndex(where: { $0.id == target.id }) else { return false }
+        return !windows[..<index].contains { $0.frame.intersects(target.frame) }
     }
 
     func dismiss() {
