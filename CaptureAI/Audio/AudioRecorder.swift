@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import CoreMedia
 import Foundation
 import OSLog
@@ -46,6 +47,19 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
     private var deviceName = "—"
     private var levelValue: Float = 0
     private var runtimeErrorObserver: NSObjectProtocol?
+    private var disconnectObserver: NSObjectProtocol?
+    /// Amostras seguidas exatamente zeradas.
+    ///
+    /// Zero absoluto é mudo, não alguém calado: um microfone ligado sempre
+    /// capta algum ruído do ambiente. É o único sinal do botão de mudo de
+    /// microfones USB como o fifine, que não avisam o macOS.
+    private var consecutiveZeroSamples = 0
+    /// Zeros seguidos por este tempo pausam a captura como mudo.
+    private static let mutedSilenceSamples = Int(sampleRate * 2)
+    /// Dispositivo em uso na captura aberta.
+    private var activeDevice: AVCaptureDevice?
+    /// Listeners de mudo/volume no dispositivo atual (CoreAudio).
+    private var muteListener: (deviceID: AudioDeviceID, block: AudioObjectPropertyListenerBlock)?
     /// PCM 16 kHz mono da captura atual — usado pela ASR local sem decodificar o `.m4a`.
     private var pcmSamples: [Float] = []
     /// Energia acumulada bloco a bloco, evitando revarrer o PCM no fim.
@@ -54,6 +68,9 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
     private var finalizationTask: Task<URL, Error>?
 
     private(set) var lastDiagnostics: CaptureDiagnostics = .empty
+
+    /// Microfone caiu e a captura pausou; chamado fora do MainActor.
+    var onMicrophoneInterruption: (@Sendable (MicrophoneInterruption) -> Void)?
 
     var audioLevel: Float {
         lock.lock()
@@ -85,12 +102,43 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
         ) { [weak self] notification in
             let error = notification.userInfo?[AVCaptureSessionErrorKey]
             self?.logger.error("Erro em tempo de execução na sessão de captura: \(String(describing: error))")
+            self?.configQueue.async {
+                guard let self else { return }
+                // Ao tirar o cabo, o erro da sessão às vezes chega antes do
+                // aviso de desconexão; o motivo certo é o que o usuário fez.
+                self.lock.lock()
+                let unplugged = self.activeDevice.map { !$0.isConnected } ?? false
+                self.lock.unlock()
+                self.interruptCapture { name in
+                    unplugged ? .disconnected(deviceName: name) : .stopped(deviceName: name)
+                }
+            }
+        }
+
+        disconnectObserver = NotificationCenter.default.addObserver(
+            forName: AVCaptureDevice.wasDisconnectedNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] notification in
+            guard let device = notification.object as? AVCaptureDevice else { return }
+            let uid = device.uniqueID
+            self?.configQueue.async {
+                guard let self else { return }
+                self.lock.lock()
+                let isActive = self.activeDevice?.uniqueID == uid
+                self.lock.unlock()
+                guard isActive else { return }
+                self.interruptCapture { .disconnected(deviceName: $0) }
+            }
         }
     }
 
     deinit {
         if let runtimeErrorObserver {
             NotificationCenter.default.removeObserver(runtimeErrorObserver)
+        }
+        if let disconnectObserver {
+            NotificationCenter.default.removeObserver(disconnectObserver)
         }
     }
 
@@ -221,6 +269,8 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
         observedPeak = 0
         levelValue = 0
         deviceName = device.localizedName
+        activeDevice = device
+        consecutiveZeroSamples = 0
         pcmSamples.removeAll(keepingCapacity: true)
         speechStats = SpeechEnergyStats()
         sessionOpen = true
@@ -228,8 +278,14 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
         lock.unlock()
 
         LiveAudioMeter.shared.reset()
+        startObservingMute(of: device)
         session.startRunning()
         logger.info("Captura iniciada em \(device.localizedName, privacy: .public) → \(fileURL.lastPathComponent, privacy: .public)")
+
+        // Já começou mutado: pausa logo, antes de gravar segundos de silêncio.
+        if isMuted(device) {
+            interruptCapture { .muted(deviceName: $0) }
+        }
     }
 
     private func pauseCapture() throws {
@@ -252,14 +308,97 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
     private func resumeCapture() throws {
         lock.lock()
         let canResume = sessionOpen && !capturing
+        let current = activeDevice
         lock.unlock()
         guard canResume else { throw VoiceInputError.recordingNotInProgress }
 
+        // O microfone pode ter saído durante a pausa: troca pelo padrão atual
+        // e segue no mesmo arquivo (a saída é sempre 16 kHz mono).
+        var device = current
+        if device?.isConnected != true {
+            let replacement = try resolveInputDevice()
+            try configureSession(with: replacement)
+            startObservingMute(of: replacement)
+            lock.lock()
+            activeDevice = replacement
+            deviceName = replacement.localizedName
+            lock.unlock()
+            device = replacement
+            logger.info("Captura segue em outro microfone: \(replacement.localizedName, privacy: .public)")
+        }
+
+        if let device, isMuted(device) {
+            throw VoiceInputError.microphoneMuted
+        }
+
         lock.lock()
         capturing = true
+        consecutiveZeroSamples = 0
         lock.unlock()
         session.startRunning()
         logger.info("Captura retomada.")
+    }
+
+    /// Pausa sozinha porque o microfone sumiu, foi mutado ou parou.
+    ///
+    /// Roda na `configQueue`. Só age com captura ativa: pausado pelo usuário
+    /// não há o que interromper, e o aviso apareceria do nada.
+    private func interruptCapture(_ reason: (String) -> MicrophoneInterruption) {
+        lock.lock()
+        let isActive = sessionOpen && capturing
+        let name = deviceName
+        lock.unlock()
+        guard isActive else { return }
+
+        session.stopRunning()
+        sampleQueue.sync { }
+
+        lock.lock()
+        capturing = false
+        levelValue = 0
+        lock.unlock()
+        LiveAudioMeter.shared.reset()
+
+        let interruption = reason(name)
+        logger.notice("Captura pausada automaticamente: \(interruption.title, privacy: .public) (\(name, privacy: .public))")
+        onMicrophoneInterruption?(interruption)
+    }
+
+    // MARK: - Mudo (CoreAudio)
+
+    private func isMuted(_ device: AVCaptureDevice) -> Bool {
+        guard let deviceID = SystemAudioDevice.deviceID(forUID: device.uniqueID) else { return false }
+        return SystemAudioDevice.isInputMuted(deviceID)
+    }
+
+    /// Escuta mudo e volume de entrada do dispositivo da captura.
+    private func startObservingMute(of device: AVCaptureDevice) {
+        stopObservingMute()
+        guard let deviceID = SystemAudioDevice.deviceID(forUID: device.uniqueID) else { return }
+
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            // Já entregue na configQueue (fila passada ao CoreAudio).
+            guard let self, SystemAudioDevice.isInputMuted(deviceID) else { return }
+            self.interruptCapture { .muted(deviceName: $0) }
+        }
+
+        var registered = false
+        for var address in SystemAudioDevice.inputMuteAddresses where AudioObjectHasProperty(deviceID, &address) {
+            if AudioObjectAddPropertyListenerBlock(deviceID, &address, configQueue, block) == noErr {
+                registered = true
+            }
+        }
+        if registered {
+            muteListener = (deviceID, block)
+        }
+    }
+
+    private func stopObservingMute() {
+        guard let listener = muteListener else { return }
+        for var address in SystemAudioDevice.inputMuteAddresses where AudioObjectHasProperty(listener.deviceID, &address) {
+            AudioObjectRemovePropertyListenerBlock(listener.deviceID, &address, configQueue, listener.block)
+        }
+        muteListener = nil
     }
 
     private func configureSession(with device: AVCaptureDevice) throws {
@@ -305,6 +444,10 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
         lock.unlock()
 
         LiveAudioMeter.shared.reset()
+        stopObservingMute()
+        lock.lock()
+        activeDevice = nil
+        lock.unlock()
 
         guard wasOpen, hasWriter, let fileURL else {
             completion(.failure(VoiceInputError.recordingNotInProgress))
@@ -429,14 +572,14 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
             deviceTypes: [.microphone, .external],
             mediaType: .audio,
             position: .unspecified
-        ).devices
+        ).devices.filter(\.isConnected)
 
         if let uid = SystemAudioDevice.defaultInputDeviceUID,
            let match = discovered.first(where: { $0.uniqueID == uid }) {
             return match
         }
 
-        if let fallback = AVCaptureDevice.default(for: .audio) {
+        if let fallback = AVCaptureDevice.default(for: .audio), fallback.isConnected {
             return fallback
         }
 
@@ -467,6 +610,15 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
         }
 
         measure(sampleBuffer)
+
+        // Outro microfone depois de uma troca pode vir com relógio atrás do
+        // último bloco; o writer rejeitaria. O PCM já foi guardado em `measure`.
+        lock.lock()
+        let previousEnd = lastBufferEndTime
+        lock.unlock()
+        if let previousEnd, CMTimeCompare(presentationTime, previousEnd) < 0 {
+            return
+        }
 
         guard input.isReadyForMoreMediaData, input.append(sampleBuffer) else { return }
 
@@ -538,8 +690,24 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
         speechStats.loudSampleCount += loudSamples
         levelValue += (normalized - levelValue) * (normalized > levelValue ? 0.6 : 0.25)
         let level = levelValue
+        var mutedBySilence = false
+        if peak == 0 {
+            let before = consecutiveZeroSamples
+            consecutiveZeroSamples += sampleCount
+            mutedBySilence = before < Self.mutedSilenceSamples
+                && consecutiveZeroSamples >= Self.mutedSilenceSamples
+        } else {
+            consecutiveZeroSamples = 0
+        }
         lock.unlock()
 
         LiveAudioMeter.shared.setLevel(level)
+        if mutedBySilence {
+            logger.notice("Áudio zerado há 2 s: microfone mutado no próprio aparelho.")
+            // Estamos na sampleQueue, que a pausa drena: vai para a configQueue.
+            configQueue.async { [weak self] in
+                self?.interruptCapture { .muted(deviceName: $0) }
+            }
+        }
     }
 }

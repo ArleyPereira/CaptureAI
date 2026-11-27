@@ -9,10 +9,17 @@ final class RecordingOverlayController {
     private var hostingView: OverlayHostingView<RecordingOverlay>?
     private var appState: AppState?
     private var currentSize: CGSize = RecordingOverlay.recordingBarSize
+    /// Balão do microfone, num painel próprio acima da barra.
+    private var warningPanel: NSPanel?
+    private var warningHosting: NSHostingView<MicrophoneWarningBubble>?
 
     func sync(with appState: AppState) {
         self.appState = appState
+        syncBar(with: appState)
+        syncWarning(with: appState)
+    }
 
+    private func syncBar(with appState: AppState) {
         let style = RecordingHUDStyle(rawValue: appState.settings.recordingHUDStyle) ?? .moderno
         let isRescue = appState.recordingState == .awaitingManualInsert
             && !(appState.pendingDictationText ?? "").isEmpty
@@ -40,7 +47,10 @@ final class RecordingOverlayController {
         // Captura para um campo do app aparece mesmo com HUD "Nenhuma": ali o
         // usuário clicou num microfone e precisa ver que está gravando — e como
         // parar. Sem barra, o clique não teria retorno nenhum.
-        guard style.showsFloatingBar || appState.isCapturingForField else {
+        // O microfone caiu e a gravação pausou sozinha: sem barra, o usuário
+        // nem saberia que parou de gravar — e não teria onde continuar.
+        let mustWarn = appState.microphoneInterruption != nil && appState.recordingState == .paused
+        guard style.showsFloatingBar || appState.isCapturingForField || mustWarn else {
             hide()
             return
         }
@@ -92,6 +102,57 @@ final class RecordingOverlayController {
 
     private func hide() {
         panel?.orderOut(nil)
+    }
+
+    // MARK: - Aviso do microfone
+
+    private func syncWarning(with appState: AppState) {
+        guard appState.recordingState == .paused,
+              let interruption = appState.microphoneInterruption,
+              appState.playback.session == nil,
+              let barPanel = panel, barPanel.isVisible else {
+            warningPanel?.orderOut(nil)
+            return
+        }
+
+        let size = MicrophoneWarningBubble.size
+        let bubble = MicrophoneWarningBubble(interruption: interruption)
+        if let warningHosting {
+            warningHosting.rootView = bubble
+        } else {
+            let hosting = NSHostingView(rootView: bubble)
+            hosting.frame = NSRect(origin: .zero, size: size)
+            let built = NSPanel(
+                contentRect: NSRect(origin: .zero, size: size),
+                styleMask: [.borderless, .nonactivatingPanel],
+                backing: .buffered,
+                defer: false
+            )
+            built.contentView = hosting
+            built.isFloatingPanel = true
+            built.level = .floating
+            built.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            built.isOpaque = false
+            built.backgroundColor = .clear
+            built.hasShadow = true
+            built.hidesOnDeactivate = false
+            built.isReleasedWhenClosed = false
+            // Só informa: os botões ficam na barra, e o tooltip não exige clique.
+            built.ignoresMouseEvents = false
+            warningPanel = built
+            warningHosting = hosting
+        }
+
+        guard let warningPanel else { return }
+        let bar = barPanel.frame
+        let frame = NSRect(
+            x: bar.midX - size.width / 2,
+            y: bar.maxY + 8,
+            width: size.width,
+            height: size.height
+        )
+        warningPanel.setFrame(frame, display: true)
+        warningPanel.orderFrontRegardless()
     }
 
     private func makePanel(appState: AppState, size: CGSize) -> (panel: OverlayPanel, hosting: OverlayHostingView<RecordingOverlay>) {

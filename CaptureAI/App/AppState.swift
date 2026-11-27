@@ -8,7 +8,22 @@ import OSLog
 @MainActor
 final class AppState {
     var recordingState: RecordingState = .idle {
-        didSet { overlayController.sync(with: self) }
+        didSet {
+            // O aviso vale só para a pausa que ele causou; gravando de novo ou
+            // fora da captura, não há mais o que avisar.
+            if recordingState != .paused {
+                microphoneInterruption = nil
+            }
+            overlayController.sync(with: self)
+        }
+    }
+
+    /// Por que a captura pausou sozinha (microfone desconectado ou mutado).
+    var microphoneInterruption: MicrophoneInterruption? {
+        didSet {
+            guard microphoneInterruption != oldValue else { return }
+            overlayController.sync(with: self)
+        }
     }
 
     var lastRecordingURL: URL?
@@ -126,6 +141,39 @@ final class AppState {
             guard let self else { return }
             self.overlayController.sync(with: self)
         }
+
+        self.audioRecorder.onMicrophoneInterruption = { [weak self] interruption in
+            Task { @MainActor in
+                self?.handleMicrophoneInterruption(interruption)
+            }
+        }
+    }
+
+    /// Microfone já mutado ao iniciar: o gravador pausa antes de o estado
+    /// virar `.recording`, e o evento pode chegar cedo demais para ser visto.
+    private func reportMutedAtStartIfNeeded() {
+        guard audioRecorder.isPaused, recordingState == .recording else { return }
+        let name = SystemAudioDevice.defaultInputDeviceName ?? "O microfone"
+        handleMicrophoneInterruption(.muted(deviceName: name))
+    }
+
+    /// O gravador pausou sozinho: microfone desconectado, mutado ou mudo.
+    private func handleMicrophoneInterruption(_ interruption: MicrophoneInterruption) {
+        // A pausa já aconteceu no gravador; aqui só o estado acompanha.
+        // Pausado pelo usuário, o evento chegaria atrasado e é ignorado.
+        guard recordingState == .recording else { return }
+        if let startedAt = recordingStartedAt {
+            accumulatedRecordingDuration += Date().timeIntervalSince(startedAt)
+        }
+        recordingStartedAt = nil
+        stopLevelPolling()
+        LiveAudioMeter.shared.reset()
+        displayedAudioLevel = 0
+        recordingDurationText = Self.formatDuration(accumulatedRecordingDuration)
+        recordingState = .paused
+        microphoneInterruption = interruption
+        NSSound.beep()
+        logger.notice("Ditagem pausada: \(interruption.title, privacy: .public)")
     }
 
     /// Toca o áudio ligado a uma entrada do histórico.
@@ -426,6 +474,7 @@ final class AppState {
             lastRecordingByteCount = nil
             startLevelPolling()
             startDurationTicker()
+            reportMutedAtStartIfNeeded()
         } catch let error as VoiceInputError where error == .microphonePermissionDenied {
             failWithPermission(error)
         } catch let error as VoiceInputError {
@@ -487,6 +536,7 @@ final class AppState {
             lastRecordingByteCount = nil
             startLevelPolling()
             startDurationTicker()
+            reportMutedAtStartIfNeeded()
         } catch let error as VoiceInputError where error == .microphonePermissionDenied {
             finishFieldCapture(with: nil)
             failWithPermission(error)
@@ -541,6 +591,14 @@ final class AppState {
             recordingState = .recording
             startLevelPolling()
             startDurationTicker()
+        } catch let error as VoiceInputError where error == .microphoneMuted || error == .noInputDevice {
+            // O microfone ainda não voltou. Falhar aqui jogaria fora o que já
+            // foi dito; a ditagem fica pausada esperando o usuário.
+            let name = microphoneInterruption?.deviceName ?? "O microfone"
+            microphoneInterruption = error == .microphoneMuted
+                ? .muted(deviceName: name)
+                : .disconnected(deviceName: name)
+            NSSound.beep()
         } catch {
             failRecording(message: (error as? VoiceInputError)?.localizedDescription
                 ?? VoiceInputError.recordingFailed.localizedDescription)
@@ -622,6 +680,7 @@ final class AppState {
             lastRecordingByteCount = nil
             startLevelPolling()
             startDurationTicker()
+            reportMutedAtStartIfNeeded()
         } catch let error as VoiceInputError where error == .microphonePermissionDenied {
             isMicrophoneOnlyTest = false
             failWithPermission(error)
