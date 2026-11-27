@@ -17,6 +17,7 @@ enum VoiceInputError: LocalizedError, Equatable {
     case busy
     case localModelMissing
     case noSpeechDetected
+    case microphoneMuted
 
     var errorDescription: String? {
         switch self {
@@ -50,6 +51,8 @@ enum VoiceInputError: LocalizedError, Equatable {
             return "Baixe o modelo local em Configurações → Modelos → Local antes de usar a transcrição local."
         case .noSpeechDetected:
             return "Nenhuma fala detectada. Tente ditado de novo."
+        case .microphoneMuted:
+            return "O microfone continua mutado. Tire o mudo e continue."
         }
     }
 }

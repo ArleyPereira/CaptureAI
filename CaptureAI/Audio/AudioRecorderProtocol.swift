@@ -29,6 +29,11 @@ protocol AudioRecorderProtocol: AnyObject {
     /// Métricas da última captura concluída.
     var lastDiagnostics: CaptureDiagnostics { get }
 
+    /// Microfone desconectado, mutado ou mudo: a captura já foi pausada.
+    ///
+    /// Chamado fora do MainActor.
+    var onMicrophoneInterruption: (@Sendable (MicrophoneInterruption) -> Void)? { get set }
+
     /// Inicia a gravação em um arquivo temporário.
     func startRecording() async throws
 

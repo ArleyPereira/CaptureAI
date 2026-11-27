@@ -38,6 +38,73 @@ enum SystemAudioDevice {
         stringProperty(kAudioDevicePropertyDeviceUID)
     }
 
+    // MARK: - Mudo
+
+    /// Propriedades de entrada que indicam microfone calado.
+    ///
+    /// Nem todo dispositivo publica as duas: o embutido do Mac tem volume e
+    /// não tem mudo; muitos USB e headsets têm mudo físico.
+    static let inputMuteAddresses: [AudioObjectPropertyAddress] = [
+        AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyMute,
+            mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        ),
+        AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioDevicePropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    ]
+
+    /// Converte o UID (o `uniqueID` do `AVCaptureDevice`) no ID do CoreAudio.
+    static func deviceID(forUID uid: String) -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var cfUID = uid as CFString
+        var deviceID = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = withUnsafeMutablePointer(to: &cfUID) { uidPointer in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                UInt32(MemoryLayout<CFString>.size),
+                uidPointer,
+                &size,
+                &deviceID
+            )
+        }
+        guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
+        return deviceID
+    }
+
+    /// `true` se a entrada está mutada ou com volume zerado.
+    static func isInputMuted(_ deviceID: AudioDeviceID) -> Bool {
+        var muteAddress = inputMuteAddresses[0]
+        if AudioObjectHasProperty(deviceID, &muteAddress) {
+            var muted: UInt32 = 0
+            var size = UInt32(MemoryLayout<UInt32>.size)
+            if AudioObjectGetPropertyData(deviceID, &muteAddress, 0, nil, &size, &muted) == noErr,
+               muted != 0 {
+                return true
+            }
+        }
+
+        var volumeAddress = inputMuteAddresses[1]
+        if AudioObjectHasProperty(deviceID, &volumeAddress) {
+            var volume: Float32 = 1
+            var size = UInt32(MemoryLayout<Float32>.size)
+            if AudioObjectGetPropertyData(deviceID, &volumeAddress, 0, nil, &size, &volume) == noErr,
+               volume <= 0.001 {
+                return true
+            }
+        }
+        return false
+    }
+
     private static func stringProperty(_ selector: AudioObjectPropertySelector) -> String? {
         let deviceID = defaultInputDeviceID
         guard deviceID != kAudioObjectUnknown else { return nil }
