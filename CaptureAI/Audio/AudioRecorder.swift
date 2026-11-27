@@ -18,7 +18,7 @@ private final class CaptureDelegate: NSObject, AVCaptureAudioDataOutputSampleBuf
     }
 }
 
-/// Grava o microfone padrão do sistema em `.m4a` (AAC).
+/// Grava o microfone escolhido nas configurações (ou o padrão do macOS) em `.m4a` (AAC).
 ///
 /// A saída de captura é forçada para PCM 16 bits / 16 kHz / mono: é o formato
 /// esperado pelo Parakeet e evita conversões implícitas no encoder AAC.
@@ -60,6 +60,9 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
     private var activeDevice: AVCaptureDevice?
     /// Listeners de mudo/volume no dispositivo atual (CoreAudio).
     private var muteListener: (deviceID: AudioDeviceID, block: AudioObjectPropertyListenerBlock)?
+    /// Escolhido nas configurações não estava conectado na última abertura
+    /// (início ou retomada) e a captura foi para o padrão do macOS.
+    private var fallbackValue: MicrophoneFallback?
     /// PCM 16 kHz mono da captura atual — usado pela ASR local sem decodificar o `.m4a`.
     private var pcmSamples: [Float] = []
     /// Energia acumulada bloco a bloco, evitando revarrer o PCM no fim.
@@ -88,6 +91,18 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return sessionOpen && !capturing
+    }
+
+    var activeDeviceName: String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return activeDevice?.localizedName
+    }
+
+    var inputFallback: MicrophoneFallback? {
+        lock.lock()
+        defer { lock.unlock() }
+        return fallbackValue
     }
 
     init() {
@@ -233,7 +248,8 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
     private func beginCapture() throws {
         guard !isRecording else { return }
 
-        let device = try resolveInputDevice()
+        let resolved = try resolveInputDevice()
+        let device = resolved.device
         try configureSession(with: device)
 
         let fileURL = RecordingStorage.newRecordingURL(fileExtension: "m4a")
@@ -271,6 +287,7 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
         deviceName = device.localizedName
         activeDevice = device
         consecutiveZeroSamples = 0
+        fallbackValue = resolved.fallback
         pcmSamples.removeAll(keepingCapacity: true)
         speechStats = SpeechEnergyStats()
         sessionOpen = true
@@ -312,16 +329,30 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
         lock.unlock()
         guard canResume else { throw VoiceInputError.recordingNotInProgress }
 
-        // O microfone pode ter saído durante a pausa: troca pelo padrão atual
-        // e segue no mesmo arquivo (a saída é sempre 16 kHz mono).
+        // O microfone pode ter saído durante a pausa: volta para o escolhido,
+        // se ele reapareceu, ou segue no padrão do macOS, no mesmo arquivo (a
+        // saída é sempre 16 kHz mono). Também volta para o escolhido quando a
+        // captura começou no padrão porque ele estava desconectado.
         var device = current
-        if device?.isConnected != true {
-            let replacement = try resolveInputDevice()
+        var mustSwitch = device?.isConnected != true
+        if !mustSwitch,
+           let preferredUID = MicrophoneCatalog.preferredUID,
+           device?.uniqueID != preferredUID,
+           MicrophoneCatalog.connectedCaptureDevices().contains(where: { $0.uniqueID == preferredUID }) {
+            mustSwitch = true
+        }
+        lock.lock()
+        fallbackValue = nil
+        lock.unlock()
+        if mustSwitch {
+            let resolved = try resolveInputDevice()
+            let replacement = resolved.device
             try configureSession(with: replacement)
             startObservingMute(of: replacement)
             lock.lock()
             activeDevice = replacement
             deviceName = replacement.localizedName
+            fallbackValue = resolved.fallback
             lock.unlock()
             device = replacement
             logger.info("Captura segue em outro microfone: \(replacement.localizedName, privacy: .public)")
@@ -566,14 +597,29 @@ final class AudioRecorder: AudioRecorderProtocol, @unchecked Sendable {
 
     // MARK: - Dispositivo
 
-    /// Prefere o microfone marcado como padrão no macOS, casando pelo UID do CoreAudio.
-    private func resolveInputDevice() throws -> AVCaptureDevice {
-        let discovered = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.microphone, .external],
-            mediaType: .audio,
-            position: .unspecified
-        ).devices.filter(\.isConnected)
+    /// Usa o microfone escolhido nas configurações; sem escolha, ou com ele
+    /// desconectado, o padrão do macOS (casando pelo UID do CoreAudio).
+    ///
+    /// Escolhido ausente não é erro: gravar pelo padrão é melhor que não
+    /// gravar, e `fallback` leva o aviso para o usuário saber de onde veio o áudio.
+    private func resolveInputDevice() throws -> (device: AVCaptureDevice, fallback: MicrophoneFallback?) {
+        let discovered = MicrophoneCatalog.connectedCaptureDevices()
+        let preferredUID = MicrophoneCatalog.preferredUID
 
+        if let preferredUID,
+           let chosen = discovered.first(where: { $0.uniqueID == preferredUID }) {
+            return (chosen, nil)
+        }
+
+        let device = try resolveSystemDefault(among: discovered)
+        guard preferredUID != nil else { return (device, nil) }
+
+        let missingName = MicrophoneCatalog.preferredName ?? "O microfone escolhido"
+        logger.notice("Microfone escolhido não conectado (\(missingName, privacy: .public)); usando \(device.localizedName, privacy: .public).")
+        return (device, MicrophoneFallback(missingName: missingName, usingName: device.localizedName))
+    }
+
+    private func resolveSystemDefault(among discovered: [AVCaptureDevice]) throws -> AVCaptureDevice {
         if let uid = SystemAudioDevice.defaultInputDeviceUID,
            let match = discovered.first(where: { $0.uniqueID == uid }) {
             return match

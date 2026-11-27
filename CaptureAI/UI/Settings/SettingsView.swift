@@ -414,6 +414,27 @@ struct SettingsView: View {
     private var transcriptionTab: some View {
         VStack(spacing: 16) {
             SettingsCard(
+                title: "Microfone",
+                subtitle: "De onde vem o áudio do ditado, do “Testar microfone” e dos campos das configurações."
+            ) {
+                VStack(alignment: .leading, spacing: 8) {
+                    microphoneMenu
+
+                    if let status = viewModel.microphoneStatusLine {
+                        Text(status)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(
+                                viewModel.isSelectedMicrophoneMissing
+                                    ? Color(red: 1.00, green: 0.70, blue: 0.35)
+                                    : SettingsTheme.secondaryLabel(colorScheme)
+                            )
+                            .padding(.leading, 4)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            SettingsCard(
                 title: "Idioma",
                 subtitle: "Enviado à API, exceto em “Detectar automaticamente”, que omite o campo."
             ) {
@@ -468,6 +489,87 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    /// "Padrão do macOS", separador e os aparelhos, cada um uma vez só.
+    ///
+    /// O nome do padrão aparece embaixo dele só como informação (em cinza),
+    /// não como outra opção: repetir o mesmo aparelho em duas linhas é o que
+    /// confunde.
+    private var microphoneMenu: some View {
+        Menu {
+            Button {
+                viewModel.selectMicrophone(nil)
+            } label: {
+                microphoneMenuLabel("Padrão do macOS", isSelected: viewModel.selectedMicrophoneUID == nil)
+                if let name = viewModel.microphones.defaultDeviceName {
+                    Text("Usando: \(name)")
+                }
+            }
+
+            Divider()
+
+            if let missing = viewModel.missingSelectedMicrophone {
+                Button {
+                    viewModel.selectMicrophone(missing)
+                } label: {
+                    microphoneMenuLabel(missing.name, isSelected: true)
+                    Text("Não conectado")
+                }
+            }
+
+            ForEach(viewModel.microphones.devices) { device in
+                Button {
+                    viewModel.selectMicrophone(device)
+                } label: {
+                    microphoneMenuLabel(device.name, isSelected: viewModel.selectedMicrophoneUID == device.uid)
+                }
+            }
+        } label: {
+            menuFieldLabel(viewModel.microphoneFieldTitle)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .frame(maxWidth: 360, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { viewModel.microphones.refresh() }
+    }
+
+    @ViewBuilder
+    private func microphoneMenuLabel(_ name: String, isSelected: Bool) -> some View {
+        if isSelected {
+            Label(name, systemImage: "checkmark")
+        } else {
+            Text(name)
+        }
+    }
+
+    private func menuFieldLabel(_ title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 13))
+                .foregroundStyle(SettingsTheme.primaryLabel(colorScheme))
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(SettingsTheme.secondaryLabel(colorScheme))
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: SettingsTheme.fieldCornerRadius, style: .continuous)
+                .fill(SettingsTheme.fieldFill(colorScheme))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: SettingsTheme.fieldCornerRadius, style: .continuous)
+                .strokeBorder(SettingsTheme.fieldStroke(colorScheme), lineWidth: SettingsTheme.hairline)
+        }
+        .contentShape(Rectangle())
     }
 
     private var languageMenu: some View {

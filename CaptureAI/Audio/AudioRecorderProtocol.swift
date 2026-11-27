@@ -26,6 +26,13 @@ protocol AudioRecorderProtocol: AnyObject {
     /// Nível de áudio normalizado (0...1).
     var audioLevel: Float { get }
 
+    /// Nome do microfone da captura aberta.
+    var activeDeviceName: String? { get }
+
+    /// Microfone escolhido ausente na última abertura (início ou retomada):
+    /// a captura foi para o padrão do macOS.
+    var inputFallback: MicrophoneFallback? { get }
+
     /// Métricas da última captura concluída.
     var lastDiagnostics: CaptureDiagnostics { get }
 

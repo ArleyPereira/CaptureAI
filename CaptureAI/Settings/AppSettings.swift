@@ -127,6 +127,18 @@ final class AppSettings {
         }
     }
 
+    /// UID do microfone escolhido (`AVCaptureDevice.uniqueID`); `nil` = padrão do macOS.
+    ///
+    /// Pelo UID, e não pelo nome: dois aparelhos iguais têm o mesmo nome, e o
+    /// nome muda com o idioma do sistema.
+    private(set) var microphoneUID: String?
+
+    /// Nome do microfone escolhido quando foi salvo.
+    ///
+    /// Só para exibir e avisar enquanto ele está desconectado: aí o sistema já
+    /// não sabe dizer o nome.
+    private(set) var microphoneName: String?
+
     /// Indica se existe API key salva no Keychain (sem expor o valor).
     private(set) var hasAPIKey: Bool
 
@@ -203,6 +215,13 @@ final class AppSettings {
 
         self.screenshotDirectoryURL = Self.resolveScreenshotDirectory(from: defaults)
 
+        let storedMicrophone = defaults.string(forKey: MicrophoneCatalog.preferredUIDKey)
+        let microphoneUID = storedMicrophone?.isEmpty == false ? storedMicrophone : nil
+        self.microphoneUID = microphoneUID
+        self.microphoneName = microphoneUID == nil
+            ? nil
+            : defaults.string(forKey: MicrophoneCatalog.preferredNameKey)
+
         self.hasAPIKey = apiKeyStore.hasAPIKey
     }
 
@@ -221,6 +240,19 @@ final class AppSettings {
         }
         defaults.set(url.path, forKey: DefaultsKey.screenshotDirectoryPath)
         screenshotDirectoryURL = url
+    }
+
+    /// Guarda o microfone do ditado. `nil` volta ao padrão do macOS.
+    func setMicrophone(_ device: MicrophoneDevice?) {
+        if let device {
+            defaults.set(device.uid, forKey: MicrophoneCatalog.preferredUIDKey)
+            defaults.set(device.name, forKey: MicrophoneCatalog.preferredNameKey)
+        } else {
+            defaults.removeObject(forKey: MicrophoneCatalog.preferredUIDKey)
+            defaults.removeObject(forKey: MicrophoneCatalog.preferredNameKey)
+        }
+        microphoneUID = device?.uid
+        microphoneName = device?.name
     }
 
     /// Resolve o bookmark; cai no caminho salvo quando ele falha.
