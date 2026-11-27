@@ -197,17 +197,21 @@ struct AppearanceThemePicker: View {
 
 // MARK: - Seletor da barra flutuante
 
-/// Miniaturas Moderno / Clássico (estilo Super Whisper — Recording window).
+/// Miniaturas dos estilos da barra (estilo Super Whisper — Recording window).
+/// Em grade, porque seis opções não cabem numa linha só do cartão.
 struct RecordingHUDStylePicker: View {
     @Binding var selection: RecordingHUDStyle
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 108, maximum: 108), spacing: 14, alignment: .top)],
+            alignment: .leading,
+            spacing: 14
+        ) {
             ForEach(RecordingHUDStyle.allCases) { style in
                 styleOption(style)
             }
-            Spacer(minLength: 0)
         }
     }
 
@@ -254,9 +258,9 @@ struct RecordingHUDStylePicker: View {
                 .foregroundStyle(SettingsTheme.secondaryLabel(colorScheme))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-        case .moderno, .classico:
+        case .moderno, .azul, .verde, .pink, .ambar, .vidro, .classico:
             Capsule()
-                .fill(style == .classico ? Color.black : Color(red: 0.10, green: 0.11, blue: 0.14))
+                .fill(style.palette?.tint ?? Color.black)
                 .frame(width: 84, height: 18)
                 .overlay {
                     HStack(spacing: 1.5) {
@@ -269,18 +273,10 @@ struct RecordingHUDStylePicker: View {
                     .padding(.horizontal, 10)
                 }
                 .overlay {
-                    if style == .moderno {
+                    if let palette = style.palette {
                         Capsule()
                             .strokeBorder(
-                                AngularGradient(
-                                    colors: [
-                                        Color(red: 0.30, green: 0.85, blue: 1.00),
-                                        Color(red: 0.72, green: 0.38, blue: 1.00),
-                                        Color(red: 1.00, green: 0.42, blue: 0.78),
-                                        Color(red: 0.30, green: 0.85, blue: 1.00)
-                                    ],
-                                    center: .center
-                                ),
+                                AngularGradient(colors: palette.ring, center: .center),
                                 lineWidth: 1.2
                             )
                     } else {

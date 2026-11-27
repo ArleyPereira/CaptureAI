@@ -4,7 +4,9 @@ import SwiftUI
 /// HUD de gravação: waveform, duração e pause/continua.
 /// Também exibe a barra de resgate (estilo Spokenly) quando a inserção falha.
 ///
-/// Estilos: **Moderno** (vidro + glow) ou **Clássico** (fundo preto sólido).
+/// Estilos: **Moderno**, **Azul**, **Verde**, **Pink** e **Âmbar** (vidro + glow animado,
+/// cada um com a sua paleta), **Vidro** (Liquid Glass neutro, com reflexo de
+/// luz animado) ou **Clássico** (fundo preto sólido).
 struct RecordingOverlay: View {
     @Bindable var appState: AppState
     @State private var glow = OverlayGlowDriver()
@@ -14,20 +16,17 @@ struct RecordingOverlay: View {
     static let recordingBarSize = CGSize(width: 300, height: 52)
     static let rescueBarSize = CGSize(width: 360, height: 78)
 
-    /// Cores do gradiente giratório (a primeira repete no fim para fechar o ciclo).
-    private static let glowColors: [Color] = [
-        Color(red: 0.30, green: 0.85, blue: 1.00),
-        Color(red: 0.42, green: 0.45, blue: 1.00),
-        Color(red: 0.72, green: 0.38, blue: 1.00),
-        Color(red: 1.00, green: 0.42, blue: 0.78),
-        Color(red: 0.30, green: 0.85, blue: 1.00)
-    ]
-
     private var hudStyle: RecordingHUDStyle {
         RecordingHUDStyle(rawValue: appState.settings.recordingHUDStyle) ?? .moderno
     }
 
     private var isClassic: Bool { hudStyle == .classico }
+
+    /// Liquid Glass do sistema, sem cor: troca as manchas coloridas por um reflexo branco.
+    private var isGlass: Bool { hudStyle == .vidro }
+
+    /// Cores do brilho do estilo escolhido (Moderno, Azul, Verde ou Pink).
+    private var palette: RecordingHUDPalette { hudStyle.palette ?? .moderno }
 
     private var isRescue: Bool {
         appState.recordingState == .awaitingManualInsert
@@ -60,9 +59,9 @@ struct RecordingOverlay: View {
         appState.recordingState == .paused
     }
 
-    /// Mantém a animação só no estilo moderno, enquanto o HUD de captura está à mostra.
+    /// Mantém a animação só nos estilos animados, enquanto o HUD de captura está à mostra.
     private func syncGlowDriver() {
-        if isCapturing, !isClassic, !isRescue {
+        if isCapturing, hudStyle.isAnimated, !isRescue {
             glow.start()
         } else {
             glow.stop()
@@ -151,6 +150,8 @@ struct RecordingOverlay: View {
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         if isClassic {
             shape.fill(Color.black.opacity(0.52))
+        } else if isGlass {
+            glassFill(in: shape)
         } else {
             ZStack {
                 FrostedBackground(material: .hudWindow)
@@ -319,6 +320,12 @@ struct RecordingOverlay: View {
         if isClassic {
             Capsule()
                 .fill(Color.black.opacity(0.92))
+        } else if isGlass {
+            ZStack {
+                glassFill(in: Capsule())
+                glassSheen
+            }
+            .clipShape(Capsule())
         } else {
             ZStack {
                 FrostedBackground()
@@ -335,6 +342,8 @@ struct RecordingOverlay: View {
             Capsule()
                 .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
                 .allowsHitTesting(false)
+        } else if isGlass {
+            glassBorder
         } else {
             animatedBorder
         }
@@ -343,9 +352,9 @@ struct RecordingOverlay: View {
     /// Manchas coloridas desfocadas que passeiam por dentro da cápsula.
     private var innerGlow: some View {
         ZStack {
-            glowBlob(color: Self.glowColors[0], angleOffset: 0)
-            glowBlob(color: Self.glowColors[2], angleOffset: 130)
-            glowBlob(color: Self.glowColors[3], angleOffset: 245)
+            glowBlob(color: palette.blobs[0], angleOffset: 0)
+            glowBlob(color: palette.blobs[1], angleOffset: 130)
+            glowBlob(color: palette.blobs[2], angleOffset: 245)
         }
         .blur(radius: 26)
         .opacity(0.34 + glow.intensity * 0.42)
@@ -365,7 +374,7 @@ struct RecordingOverlay: View {
     /// Borda com gradiente angular girando + halo interno.
     private var animatedBorder: some View {
         let gradient = AngularGradient(
-            colors: Self.glowColors,
+            colors: palette.ring,
             center: .center,
             angle: .degrees(glow.phase)
         )
@@ -377,6 +386,58 @@ struct RecordingOverlay: View {
                     .strokeBorder(gradient, lineWidth: 3.5)
                     .blur(radius: 5)
                     .opacity(0.45 + glow.intensity * 0.45)
+            }
+            .allowsHitTesting(false)
+    }
+
+    // MARK: - Vidro (Liquid Glass)
+
+    /// Vidro do sistema com um leve escurecido, para a onda branca seguir
+    /// legível mesmo sobre fundos claros.
+    private func glassFill<S: Shape>(in shape: S) -> some View {
+        Color.clear
+            .glassEffect(.regular.tint(Color.black.opacity(0.18)), in: shape)
+    }
+
+    /// Luz de cima (o "brilho" da borda superior do vidro) e um reflexo
+    /// branco que atravessa a barra devagar, mais forte quando há voz.
+    private var glassSheen: some View {
+        let radians = glow.phase * .pi / 180
+        let reach = Self.recordingBarSize.width * 0.42
+
+        return ZStack {
+            LinearGradient(
+                colors: [Color.white.opacity(0.16), Color.white.opacity(0.0)],
+                startPoint: .top,
+                endPoint: .center
+            )
+
+            Ellipse()
+                .fill(Color.white)
+                .frame(width: 110, height: 34)
+                .offset(x: cos(radians) * reach, y: -8)
+                .blur(radius: 18)
+                .opacity(0.10 + glow.intensity * 0.18)
+                .blendMode(.plusLighter)
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// Borda prateada fina, com o ponto de luz girando junto com o reflexo.
+    private var glassBorder: some View {
+        let gradient = AngularGradient(
+            colors: palette.ring,
+            center: .center,
+            angle: .degrees(glow.phase)
+        )
+
+        return Capsule()
+            .strokeBorder(gradient, lineWidth: 1)
+            .overlay {
+                Capsule()
+                    .strokeBorder(gradient, lineWidth: 2.5)
+                    .blur(radius: 3)
+                    .opacity(0.25 + glow.intensity * 0.35)
             }
             .allowsHitTesting(false)
     }
@@ -398,6 +459,8 @@ struct RecordingOverlay: View {
         .background {
             if isClassic {
                 Capsule().fill(Color.black.opacity(0.92))
+            } else if isGlass {
+                glassFill(in: Capsule())
             } else {
                 ZStack {
                     FrostedBackground()
@@ -412,7 +475,7 @@ struct RecordingOverlay: View {
     }
 
     private var barFill: Color {
-        Color(red: 0.07, green: 0.08, blue: 0.10)
+        palette.tint
     }
 
     private var accentColor: Color {
